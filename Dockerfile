@@ -35,4 +35,4 @@ EXPOSE 8000
 # --- 啟動指令 ---
 # 使用 daphne 啟動 ASGI 以支援 WebSocket
 # ⚠️ 請把下面的 [你的專案資料夾名稱] 改成你 settings.py 所在的資料夾名字！
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "你的專案資料夾名稱.asgi:application"]
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "Slide.asgi:application"]
