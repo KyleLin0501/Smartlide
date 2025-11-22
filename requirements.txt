@@ -32,5 +32,4 @@ beautifulsoup4>=4.12  # 若有網頁解析需求可留，不佔空間
 markdown2>=2.4        # 渲染 Markdown 摘要
 
 pdf2image==1.17.0
-fitz==0.0.1.dev2
 PyMuPDF==1.26.5
