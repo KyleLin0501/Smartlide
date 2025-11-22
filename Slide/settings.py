@@ -30,7 +30,9 @@ DEBUG = True
 
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://smartlide.onrender.com",
+    'https://*.ngrok-free.app',
+    'https://*.ngrok.io'
+    '*',
 ]
 
 ALLOWED_HOSTS = ['*']
@@ -166,3 +168,4 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer",
     },
 }
+

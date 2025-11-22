@@ -51,7 +51,8 @@
 
 <script type="module">
     const pdfId = "{{ pdf_id }}";
-    const pdfUrl = "{{ pdf_url }}";
+    let rawUrl = "{{ pdf_url }}";
+    const pdfUrl = rawUrl.replace("http://", "https://");
 
     let pdfDoc = null;
     let pageNum = 1;
