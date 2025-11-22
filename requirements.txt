@@ -1,28 +1,31 @@
-# --- Django 核心 ---
-Django==5.0.4
-asgiref==3.8.1
-sqlparse==0.5.0
-pytz==2024.1
+# --- Django 核心與工具 ---
+Django>=5.0
+asgiref>=3.8.1
+sqlparse>=0.5.0
+pytz>=2024.1
 
-# --- WebSocket / Channels (必要) ---
-channels==4.1.0
-channels-redis==4.2.0
-daphne==4.1.2
-redis==5.0.4
-Twisted==24.3.0
-autobahn==23.6.2
+# --- WebSocket / Channels (即時通訊必要) ---
+channels>=4.0
+channels-redis>=4.2.0
+daphne>=4.1.0
+redis>=5.0
+Twisted>=24.3.0
+autobahn>=23.6.2
 
 # --- 部署與資料庫 (Render 必要) ---
-whitenoise==6.6.0
-dj-database-url==2.1.0
-psycopg2-binary==2.9.9
-gunicorn==22.0.0
+whitenoise>=6.0       # 處理靜態檔案
+dj-database-url>=2.0  # 讀取資料庫設定
+psycopg2-binary>=2.9  # PostgreSQL 驅動 (Render 預設資料庫)
+gunicorn>=22.0        # 生產環境伺服器 (備用)
 
-# --- 應用邏輯 (必要) ---
-requests==2.31.0
-ollama==0.1.8
-OpenCC==1.1.9
-numpy==1.26.4
-pdfplumber==0.11.0
-pypdf==4.2.0
-Pillow==10.3.0
+# --- 遠端連線與 API (連線 Mac Studio 用) ---
+requests>=2.31.0      # 發送音訊到 Whisper Server
+ollama>=0.3.0         # 控制遠端 Ollama
+
+# --- 資料處理 (輕量級) ---
+numpy                 # 處理音訊格式 (Render 會自動下載 Linux版，很快)
+OpenCC>=1.1.9         # 繁簡轉換
+pdfplumber>=0.11.0    # 解析 PDF 文字
+pypdf>=4.0            # PDF 輔助工具
+Pillow>=10.0          # 處理圖片/縮圖
+beautifulsoup4>=4.12  # 若有網頁解析需求可留，不佔空間
