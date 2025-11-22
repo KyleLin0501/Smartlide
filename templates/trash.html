@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}垃圾桶{% endblock %}
+{% block content %}
+    <form id="delete-form">
+        <div class="toolbar d-flex justify-content-between align-items-center my-3">
+            <div>
+                <h2>垃圾桶</h2>
+                <p>這裡是已刪除的檔案。</p>
+            </div>
+            <div class="d-flex align-items-center">
+                <div class="form-check mr-3 mb-0">
+                    <input type="checkbox" class="form-check-input" id="select-all">
+                    <label class="form-check-label" for="select-all">全選</label>
+                </div>
+                <button type="button" id="delete-selected" class="btn btn-danger btn-sm">刪除所選</button>
+            </div>
+        </div>
+
+        <div class="section-overview grid-container">
+            {% for pdf in deleted_pdfs %}
+                <div class="card" data-id="{{ pdf.id }}">
+                    <input type="checkbox" class="select-checkbox" value="{{ pdf.id }}">
+                    <div class="thumb">
+                        {% if pdf.thumbnail %}
+                            <img src="{{ pdf.thumbnail.url }}" alt="縮圖">
+                        {% else %}
+                            <div class="no-thumb">無縮圖</div>
+                        {% endif %}
+                    </div>
+                    <div class="caption">
+                        <p class="filename">{{ pdf.display_name|default:pdf.file.name|slice:"5:" }}</p>
+                        <button type="button" class="btn btn-sm btn-danger single-delete">永久刪除</button>
+                    </div>
+                </div>
+            {% empty %}
+                <p>目前沒有檔案。</p>
+            {% endfor %}
+        </div>
+    </form>
+
+    <!-- 刪除確認 Modal -->
+    <div class="modal" id="confirm-delete-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle" style="display:none;">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content p-3">
+                <h5 class="modal-title" id="deleteModalTitle">確認刪除</h5>
+                <p>你確定要永久刪除所選的檔案嗎？此動作無法復原。</p>
+                <div class="d-flex justify-content-end">
+                    <button type="button" class="btn btn-secondary btn-sm mr-2" id="cancel-confirm-delete">取消</button>
+                    <button type="button" class="btn btn-danger btn-sm" id="confirm-delete-btn">確認刪除</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const csrftoken = '{{ csrf_token }}';
+            let selectedIds = [];
+
+            // 單一刪除
+            document.querySelectorAll('.single-delete').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const id = btn.closest('.card').dataset.id;
+                    if (confirm("你確定要永久刪除此檔案嗎？")) {
+                        fetch("{% url 'delete_permanently' %}", {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': csrftoken,
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: `ids[]=${id}`
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                btn.closest('.card').remove();
+                            } else {
+                                alert('刪除失敗，請稍後再試');
+                            }
+                        }).catch(() => alert('請求失敗，請稍後再試'));
+                    }
+                });
+            });
+
+            // 全選切換
+            const selectAll = document.getElementById('select-all');
+            selectAll.addEventListener('change', () => {
+                document.querySelectorAll('.select-checkbox').forEach(cb => {
+                    cb.checked = selectAll.checked;
+                });
+            });
+
+            // 點擊「刪除所選」顯示確認 modal
+            document.getElementById('delete-selected').addEventListener('click', () => {
+                selectedIds = [...document.querySelectorAll('.select-checkbox:checked')].map(cb => cb.value);
+                if (selectedIds.length === 0) {
+                    alert('請先勾選要刪除的項目');
+                    return;
+                }
+                document.getElementById('confirm-delete-modal').style.display = 'flex';
+            });
+
+            // 取消確認刪除
+            document.getElementById('cancel-confirm-delete').addEventListener('click', () => {
+                document.getElementById('confirm-delete-modal').style.display = 'none';
+            });
+
+            // 確認刪除多個
+            document.getElementById('confirm-delete-btn').addEventListener('click', () => {
+                fetch("{% url 'delete_permanently' %}", {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrftoken,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: selectedIds.map(id => `ids[]=${id}`).join('&')
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        selectedIds.forEach(id => {
+                            const card = document.querySelector(`.card[data-id="${id}"]`);
+                            if (card) card.remove();
+                        });
+                        document.getElementById('confirm-delete-modal').style.display = 'none';
+                        selectAll.checked = false;
+                    } else {
+                        alert('刪除失敗，請稍後再試');
+                    }
+                }).catch(() => alert('請求失敗，請稍後再試'));
+            });
+        });
+    </script>
+
+    <style>
+        /* Modal 樣式 */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 1050;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-dialog {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        /* toolbar 排版調整 */
+        .toolbar {
+            margin-bottom: 1rem;
+        }
+    </style>
+{% endblock %}

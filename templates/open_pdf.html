@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>語音控制 PDF 簡報</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+    <style>
+        body, html { margin: 0; height: 100%; overflow: hidden; font-family: sans-serif; background: #ffffff; }
+        #pdf-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: auto; }
+        #canvas-wrapper { position: relative; }
+        #pdf-render { display: block; }
+        #highlight-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
+        #toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: white; padding: 8px 15px; border-radius: 6px; z-index: 20; display: flex; gap: 10px; align-items: center; }
+        #toolbar button { cursor: pointer; padding: 5px 10px; }
+        #endBtn { background-color: #d9534f; color: white; border: none; border-radius: 4px; }
+        #endBtn:hover { background-color: #c9302c; }
+        #output { position: fixed; bottom: 20px; left: 20px; background: rgba(0,0,0,0.6); color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 20px; pointer-events: none; transition: opacity 0.5s; opacity: 0; z-index: 30; max-width: 80%; }
+        #status-dot { position: fixed; top: 15px; right: 15px; width: 10px; height: 10px; border-radius: 50%; background-color: red; z-index: 40; }
+
+        /* Modal */
+        #summary-modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        #summary-content { background-color: #fefefe; margin: 15% auto; padding: 20px; border: 1px solid #888; width: 50%; border-radius: 10px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div id="status-dot" title="連線狀態"></div>
+<div id="pdf-container">
+    <div id="canvas-wrapper">
+        <canvas id="pdf-render"></canvas>
+        <canvas id="highlight-layer"></canvas>
+    </div>
+</div>
+<div id="toolbar">
+    <button id="prevBtn">上一頁</button>
+    <button id="nextBtn">下一頁</button>
+    <span><input type="number" id="pageInput" min="1" style="width:50px"> / <span id="pageCount">?</span></span>
+    <button id="endBtn">結束簡報</button>
+</div>
+<div id="output"></div>
+
+<div id="summary-modal">
+    <div id="summary-content">
+        <div id="modal-msg">載入中...</div>
+    </div>
+</div>
+
+<script type="module">
+    const pdfId = "{{ pdf_id }}";
+    const pdfUrl = "{{ pdf_url }}";
+
+    let pdfDoc = null;
+    let pageNum = 1;
+    let pageRendering = false;
+    let pageNumPending = null;
+
+    const canvas = document.getElementById('pdf-render');
+    const ctx = canvas.getContext('2d');
+    const hlCanvas = document.getElementById('highlight-layer');
+    const hlCtx = hlCanvas.getContext('2d');
+    const outputDiv = document.getElementById('output');
+    const statusDot = document.getElementById('status-dot');
+    const modal = document.getElementById("summary-modal");
+    const modalMsg = document.getElementById("modal-msg");
+
+    // 初始化 PDF
+    if(pdfUrl) {
+        pdfjsLib.getDocument(pdfUrl).promise.then(doc => {
+            pdfDoc = doc;
+            document.getElementById('pageCount').textContent = pdfDoc.numPages;
+            renderPage(pageNum);
+        }).catch(err => { console.error(err); showText("PDF 載入失敗", true); });
+    }
+
+    function renderPage(num) {
+        pageRendering = true;
+        pdfDoc.getPage(num).then(page => {
+            const container = document.getElementById('pdf-container');
+            const viewportUnscaled = page.getViewport({scale: 1});
+            const scale = Math.min(container.clientWidth / viewportUnscaled.width, container.clientHeight / viewportUnscaled.height);
+            const viewport = page.getViewport({scale: scale});
+            canvas.height = viewport.height; canvas.width = viewport.width;
+            hlCanvas.height = viewport.height; hlCanvas.width = viewport.width;
+            page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => {
+                pageRendering = false;
+                loadMarks(num);
+                if (pageNumPending !== null) { renderPage(pageNumPending); pageNumPending = null; }
+            });
+            document.getElementById('pageInput').value = num;
+        });
+    }
+
+    function queueRenderPage(num) { pageRendering ? pageNumPending = num : renderPage(num); }
+    function onPrevPage() { if (pageNum > 1) { pageNum--; queueRenderPage(pageNum); } }
+    function onNextPage() { if (pageNum < pdfDoc.numPages) { pageNum++; queueRenderPage(pageNum); } }
+    function onGotoPage(num) { if(num >=1 && num <= pdfDoc.numPages) { pageNum = num; queueRenderPage(pageNum); } }
+
+    // 畫記與 UI 輔助
+    function drawRect(rect, type) {
+        const w = hlCanvas.width; const h = hlCanvas.height;
+        const x = rect[0]*w; const y = rect[1]*h; const rw = (rect[2]-rect[0])*w; const rh = (rect[3]-rect[1])*h;
+        if (type === 'H') { hlCtx.fillStyle = "rgba(255, 255, 0, 0.3)"; hlCtx.fillRect(x, y, rw, rh); }
+        else { hlCtx.beginPath(); hlCtx.moveTo(x, y+rh); hlCtx.lineTo(x+rw, y+rh); hlCtx.strokeStyle = "red"; hlCtx.lineWidth = 3; hlCtx.stroke(); }
+    }
+    async function loadMarks(page) {
+        hlCtx.clearRect(0, 0, hlCanvas.width, hlCanvas.height);
+        try {
+            const res = await fetch(`/api/get_mark_positions/${pdfId}/${page - 1}/`);
+            const data = await res.json();
+            if (data.status === 'success' && data.rects) data.rects.forEach(item => drawRect(item.rect, item.type));
+        } catch(e) {}
+    }
+    async function handleMark(type, text) {
+        try {
+            const res = await fetch(`/api/mark/${pdfId}/`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ page: pageNum - 1, type: type, text: text })
+            });
+            const data = await res.json();
+            if (data.status === 'success') { data.marks.forEach(m => drawRect(m.rect, m.type)); showText(`已標記: ${text}`); }
+        } catch(e) {}
+    }
+    let hideTimer;
+    function showText(msg, isError=false) {
+        outputDiv.textContent = msg; outputDiv.style.opacity = 1; outputDiv.style.color = isError ? "#ff6666" : "#fff";
+        clearTimeout(hideTimer); hideTimer = setTimeout(() => { outputDiv.style.opacity = 0; }, 3000);
+    }
+
+    // ------------------------------------------------------
+    // 前端提取 PDF 與 結束簡報邏輯
+    // ------------------------------------------------------
+    async function extractPdfText() {
+        if (!pdfDoc) return "";
+        let fullText = "";
+        const totalPages = pdfDoc.numPages;
+        modalMsg.textContent = `正在讀取 PDF 內容 (0/${totalPages})...`;
+
+        for (let i = 1; i <= totalPages; i++) {
+            try {
+                const page = await pdfDoc.getPage(i);
+                const tokenizedText = await page.getTextContent();
+                const pageText = tokenizedText.items.map(token => token.str).join(' ');
+                fullText += `\n[Page ${i}]\n${pageText}\n`;
+                modalMsg.textContent = `正在讀取 PDF 內容 (${i}/${totalPages})...`;
+            } catch (err) { console.error(err); }
+        }
+        return fullText;
+    }
+
+    function getCookie(name) {
+        let v = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const c = cookies[i].trim();
+                if (c.substring(0, name.length + 1) === (name + '=')) { v = decodeURIComponent(c.substring(name.length + 1)); break; }
+            }
+        }
+        return v;
+    }
+
+    document.getElementById('endBtn').onclick = async function() {
+        if (confirm("確定要結束簡報並生成摘要嗎？")) {
+            modal.style.display = "block";
+            try {
+                const pdfContent = await extractPdfText();
+                modalMsg.innerHTML = "內容讀取完畢，正在分析語音與簡報...<br>(請稍候，可能需要幾秒鐘)";
+                ws.send(JSON.stringify({ command: "end_presentation", pdf_content: pdfContent }));
+            } catch (e) {
+                console.error(e);
+                modalMsg.textContent = "錯誤：無法讀取 PDF 內容";
+                setTimeout(() => { modal.style.display = "none"; }, 2000);
+            }
+        }
+    };
+
+    // ------------------------------------------------------
+    // WebSocket 與 錄音
+    // ------------------------------------------------------
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(wsScheme + '://' + window.location.host + '/ws/speech/' + pdfId + '/');
+
+    ws.onopen = () => { console.log("WS Connected"); statusDot.style.backgroundColor = "#0f0"; showText("語音連線成功"); };
+    ws.onclose = () => { statusDot.style.backgroundColor = "red"; };
+
+    ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+
+        // --- 收到摘要，自動跳轉 ---
+        if (data.type === 'summary') {
+            modalMsg.textContent = "摘要生成完畢，正在跳轉...";
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/report/';
+
+            const csrf = document.createElement('input');
+            csrf.type = 'hidden'; csrf.name = 'csrfmiddlewaretoken'; csrf.value = getCookie('csrftoken');
+            form.appendChild(csrf);
+
+            const content = document.createElement('input');
+            content.type = 'hidden'; content.name = 'content'; content.value = data.content;
+            form.appendChild(content);
+
+            document.body.appendChild(form);
+            form.submit();
+            return;
+        }
+        if (data.type === 'info') { modalMsg.textContent = data.message; return; }
+
+        const text = data.text;
+        const cmd = data.command;
+        if (text && text !== "(無辨識結果)") showText(text);
+        if (cmd === 'next') onNextPage();
+        else if (cmd === 'prev') onPrevPage();
+        else if (cmd.startsWith('goto:')) onGotoPage(parseInt(cmd.split(':')[1]));
+        else if (cmd.startsWith('U:')) handleMark('U', cmd.substring(2));
+        else if (cmd.startsWith('H:')) handleMark('H', cmd.substring(2));
+    };
+
+    const TARGET_RATE = 16000;
+    let audioBuffer = []; let bufferSamples = 0;
+    function arrayBufferToBase64(buffer) { let binary = ''; const bytes = new Uint8Array(buffer); for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]); return window.btoa(binary); }
+    function resampleToTarget(samples, srcRate, targetRate){ if (!samples || samples.length === 0) return new Float32Array(0); if (srcRate === targetRate) return samples; const srcLen = samples.length; const dstLen = Math.round(srcLen * targetRate / srcRate); const dst = new Float32Array(dstLen); const ratio = (srcLen - 1) / (dstLen - 1); for (let i = 0; i < dstLen; i++) { const idx = i * ratio; const i0 = Math.floor(idx); const i1 = Math.min(i0 + 1, srcLen - 1); dst[i] = samples[i0] * (1 - (idx - i0)) + samples[i1] * (idx - i0); } return dst; }
+
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, sampleRate: TARGET_RATE } }).then(stream => {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        source.connect(processor); processor.connect(audioCtx.destination);
+        const srcRate = audioCtx.sampleRate;
+        processor.onaudioprocess = (e) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const inputData = e.inputBuffer.getChannelData(0);
+            const resampled = resampleToTarget(inputData, srcRate, TARGET_RATE);
+            audioBuffer.push(resampled); bufferSamples += resampled.length;
+            if (bufferSamples >= TARGET_RATE * 3) {
+                const total = new Float32Array(bufferSamples);
+                let offset = 0; for(let chunk of audioBuffer) { total.set(chunk, offset); offset += chunk.length; }
+                ws.send(JSON.stringify({ audio_data: arrayBufferToBase64(total.slice(0, TARGET_RATE * 3).buffer), format: "audio/float32", rate: TARGET_RATE }));
+                const remain = total.slice(TARGET_RATE * 3); audioBuffer = [remain]; bufferSamples = remain.length;
+            }
+        };
+    }).catch(err => { console.error("Microphone error:", err); showText("無法存取麥克風", true); });
+
+    document.getElementById('prevBtn').onclick = onPrevPage;
+    document.getElementById('nextBtn').onclick = onNextPage;
+    document.getElementById('pageInput').onchange = (e) => onGotoPage(parseInt(e.target.value));
+    window.addEventListener('resize', () => renderPage(pageNum));
+</script>
+</body>
+</html>

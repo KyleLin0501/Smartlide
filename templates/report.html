@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>會議摘要報告</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.6; background-color: #f4f4f9; color: #333; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-radius: 8px; }
+        h1 { text-align: center; color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 15px; }
+        .btn-group { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 20px; }
+        .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; text-decoration: none; color: white; transition: 0.3s; }
+        .btn-copy { background-color: #007bff; } .btn-copy:hover { background-color: #0056b3; }
+        .btn-back { background-color: #6c757d; } .btn-back:hover { background-color: #545b62; }
+        #report-content h2 { border-bottom: 1px solid #eee; padding-bottom: 8px; margin-top: 25px; }
+        #report-content ul { padding-left: 25px; }
+        #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 2px; padding: 16px; position: fixed; z-index: 1; left: 50%; bottom: 30px; transform: translateX(-50%); }
+        #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="btn-group">
+        <a href="/" class="btn btn-back">回首頁</a>
+        <button class="btn btn-copy" onclick="copyContent()">複製 Markdown 內容</button>
+    </div>
+    <h1>📄 會議摘要報告</h1>
+    <div id="report-content"></div>
+    <textarea id="raw-markdown" style="display:none;">{{ content }}</textarea>
+</div>
+<div id="toast">內容已複製到剪貼簿！</div>
+<script>
+    const raw = document.getElementById('raw-markdown').value;
+    const div = document.getElementById('report-content');
+    if (window.marked) div.innerHTML = marked.parse(raw);
+    else div.textContent = raw;
+
+    function copyContent() {
+        navigator.clipboard.writeText(raw).then(() => {
+            const x = document.getElementById("toast");
+            x.className = "show"; setTimeout(() => { x.className = x.className.replace("show", ""); }, 3000);
+        }).catch(() => alert('複製失敗'));
+    }
+</script>
+</body>
+</html>

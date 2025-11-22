@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<section class="section-register">
+    <div class="login-container">
+        <a href="{% url 'index' %}">
+            <img src="{% static 'img/logo.png' %}" alt="logo">
+        </a>
+        <form id="register-form">
+            <input type="email" id="email" placeholder="Enter your email" required>
+            <input type="password" id="password" placeholder="Enter your password" required>
+            <button type="submit" class="register-btn">Register</button>
+        </form>
+        <p id="message"></p>
+    </div>
+</section>
+
+<!-- Firebase 註冊功能 -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+    import { getAuth, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyCT1WH_i7HTXDdOVBIDLlWkr6Yl86P7PmU",
+        authDomain: "smartlide.firebaseapp.com",
+        projectId: "smartlide",
+        storageBucket: "smartlide.appspot.com",
+        messagingSenderId: "697955025928",
+        appId: "1:697955025928:web:e04385bc766f5bf5667dbd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const form = document.getElementById("register-form");
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const email = document.getElementById("email").value;
+            const password = document.getElementById("password").value;
+
+            createUserWithEmailAndPassword(auth, email, password)
+                .then((userCredential) => {
+                    const user = userCredential.user;
+                    console.log("註冊成功：", user);
+                    document.getElementById("message").innerText = "註冊成功，請前往登入";
+                })
+                .catch((error) => {
+                    console.error("註冊錯誤：", error.message);
+                    document.getElementById("message").innerText = "註冊失敗：" + error.message;
+                });
+        });
+    });
+</script>
+{% endblock %}

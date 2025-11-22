@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <style>
+        #dropZone {
+            width: 100%;
+            height: 100px;
+            border: 2px dashed #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #666;
+        }
+        canvas {
+            border: 1px solid black;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>PDF Viewer</h2>
+    <div id="dropZone">將 PDF 拖曳到此處</div>
+    <canvas id="pdfCanvas"></canvas>
+    <br>
+    <button id="prevPage">上一頁</button>
+    <button id="nextPage">下一頁</button>
+    <p>目前頁數：<span id="currentPage">1</span> / <span id="totalPages">?</span></p>
+
+    <script>
+        let pdfDoc = null;
+        let pageNum = 1;
+        let totalPages = 0;
+        let pdfFile = null;
+        const canvas = document.getElementById("pdfCanvas");
+        const ctx = canvas.getContext("2d");
+
+        const urlParams = new URLSearchParams(window.location.search);
+        pageNum = parseInt(urlParams.get('page')) || 1; // 讀取 URL 頁數參數
+
+        const dropZone = document.getElementById("dropZone");
+
+        // 處理拖曳 PDF 進入
+        dropZone.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            dropZone.style.borderColor = "blue";
+        });
+
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.style.borderColor = "#ccc";
+        });
+
+        dropZone.addEventListener("drop", (event) => {
+            event.preventDefault();
+            dropZone.style.borderColor = "#ccc";
+            const file = event.dataTransfer.files[0];
+
+            if (file && file.type === "application/pdf") {
+                pdfFile = file;
+                loadPDF(URL.createObjectURL(file));
+            } else {
+                alert("請拖曳 PDF 檔案");
+            }
+        });
+
+        function loadPDF(fileUrl) {
+            pdfjsLib.getDocument(fileUrl).promise.then(doc => {
+                pdfDoc = doc;
+                totalPages = doc.numPages;
+                document.getElementById("totalPages").textContent = totalPages;
+                renderPage(pageNum);
+            });
+        }
+
+        function renderPage(num) {
+            if (!pdfDoc) return;
+
+            pdfDoc.getPage(num).then(page => {
+                const viewport = page.getViewport({ scale: 0.75 });
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                const renderContext = { canvasContext: ctx, viewport: viewport };
+                page.render(renderContext);
+
+                document.getElementById("currentPage").textContent = num;
+            });
+        }
+
+        function changePage(newPage) {
+            if (newPage > 0 && newPage <= totalPages) {
+                window.history.pushState({}, "", `?page=${newPage}`);
+                pageNum = newPage;
+                renderPage(pageNum);
+            }
+        }
+
+        document.getElementById("prevPage").addEventListener("click", () => changePage(pageNum - 1));
+        document.getElementById("nextPage").addEventListener("click", () => changePage(pageNum + 1));
+    </script>
+</body>
+</html>

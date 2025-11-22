@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Google 幻灯片控制</title>
+    <style>
+        /* 容器：確保 iframe 和 canvas 疊加 */
+        .slide-container {
+            position: relative;
+            width: 800px;
+            height: 450px;
+        }
+
+        /* Google Slides */
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* 高亮標記 Canvas */
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 讓 iframe 可點擊 */
+        }
+
+        /* 控制按鈕 */
+        .controls {
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 0 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="slide-container">
+        <!-- 嵌入 Google 幻燈片 -->
+        <iframe id="slideFrame"
+            src="https://docs.google.com/presentation/d/e/2PACX-1vTHnQtIYwgmkyV8QprXz0C7eFfleWu3lC7qHv94ySlb8ZKlz31Lq6uQ_Pv7Nt6kGVXJwGAfC9NYCkLy/embed?start=false&loop=false&delayms=3000"
+            allowfullscreen>
+        </iframe>
+
+        <!-- 疊加 Canvas 作為螢光筆標記 -->
+        <canvas id="highlighterCanvas"></canvas>
+    </div>
+
+    <!-- 控制按鈕 -->
+    <div class="controls">
+        <button onclick="clearCanvas()">清除標記</button>
+    </div>
+
+<script>
+    const canvas = document.getElementById("highlighterCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // 確保 Canvas 尺寸與 iframe 相同
+    function resizeCanvas() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas(); // 初始化
+
+    let drawing = false;
+
+    // 設定螢光筆樣式
+    ctx.strokeStyle = "rgba(255, 255, 0, 0.5)";  // 半透明黃色
+    ctx.lineWidth = 10;
+    ctx.lineJoin = "round";
+
+    // 滑鼠按下開始畫
+    canvas.addEventListener("mousedown", (e) => {
+        drawing = true;
+        ctx.beginPath();
+        ctx.moveTo(e.offsetX, e.offsetY);
+    });
+
+    // 滑鼠移動畫線
+    canvas.addEventListener("mousemove", (e) => {
+        if (!drawing) return;
+        ctx.lineTo(e.offsetX, e.offsetY);
+        ctx.stroke();
+    });
+
+    // 滑鼠放開停止畫線
+    canvas.addEventListener("mouseup", () => {
+        drawing = false;
+    });
+
+    // 清除標記
+    function clearCanvas() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+</script>
+
+</body>
+</html>

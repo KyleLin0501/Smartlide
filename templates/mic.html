@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>錄音測試</title>
+</head>
+<body>
+    <button id="start-recording">開始錄音</button>
+    <button id="stop-recording" disabled>停止錄音</button>
+    <audio id="audio-player" controls></audio>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+
+        document.getElementById("start-recording").addEventListener("click", async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.start();
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    document.getElementById("audio-player").src = audioUrl;
+
+                    // 將音訊上傳到 Django 後端
+                    const formData = new FormData();
+                    formData.append("audio", audioBlob, "recording.wav");
+
+                    fetch("/upload_audio/", {
+                        method: "POST",
+                        body: formData
+                    }).then(response => console.log("錄音上傳成功！"))
+                      .catch(error => console.error("上傳失敗:", error));
+                };
+
+                document.getElementById("stop-recording").disabled = false;
+            } catch (error) {
+                console.error("無法取得麥克風權限:", error);
+            }
+        });
+
+        document.getElementById("stop-recording").addEventListener("click", () => {
+            mediaRecorder.stop();
+            document.getElementById("stop-recording").disabled = true;
+        });
+    </script>
+</body>
+</html>

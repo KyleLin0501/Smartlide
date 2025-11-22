@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}最近瀏覽{% endblock %}
+
+{% block content %}
+<style>
+    /* RWD Grid 設定 */
+    .grid-container {
+        display: grid;
+        gap: 20px; /* 卡片間距 */
+        padding: 10px 0;
+        /* 預設手機版：1 列 */
+        grid-template-columns: repeat(1, 1fr);
+    }
+
+    /* 平板/中螢幕：3 列 */
+    @media (min-width: 768px) {
+        .grid-container {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+
+    /* 桌機/大螢幕：5 列 */
+    @media (min-width: 1200px) {
+        .grid-container {
+            grid-template-columns: repeat(5, 1fr);
+        }
+    }
+</style>
+
+    <h2 class="my-3">最近瀏覽</h2>
+
+    {% if last_week_pdfs %}
+        <h4 class="mt-4">📅 七天內開啟</h4>
+        <div class="section-recent grid-container">
+            {% for pdf in last_week_pdfs %}
+                 {% include "card.html" %}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% if last_month_pdfs %}
+        <h4 class="mt-4">🗓️ 一個月內開啟</h4>
+        <div class="section-overview grid-container">
+            {% for pdf in last_month_pdfs %}
+                {# 修正：統一使用 include card.html，確保樣式一致且包含功能選單 #}
+                {% include "card.html" %}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% if not last_week_pdfs and not last_month_pdfs %}
+        <p>目前沒有最近開啟的文件。</p>
+    {% endif %}
+
+    <div id="rename-modal" class="modal">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+            <h3 id="rename-title">重新命名</h3>
+            <input type="text" id="rename-input" aria-label="新檔案名稱">
+            <div class="modal-actions">
+                <button id="rename-confirm">確定</button>
+                <button id="rename-cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="delete-modal" class="modal">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <h3 id="delete-title">確認刪除</h3>
+            <p>確定要刪除這個檔案嗎？</p>
+            <div class="modal-actions">
+                <button id="delete-confirm">刪除</button>
+                <button id="delete-cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const csrftoken = '{{ csrf_token }}';
+            let currentRenameId = null;
+            let currentDeleteId = null;
+
+            // 切換卡片內的選單 (使用 Event Delegation 確保動態載入也能運作)
+            document.body.addEventListener('click', e => {
+                if (e.target.classList.contains('menu-btn')) {
+                    e.stopPropagation();
+                    const menu = e.target.closest('.caption').querySelector('.menu');
+                    // 關閉其他已開啟的 menu
+                    document.querySelectorAll('.card .menu').forEach(m => {
+                        if (m !== menu) m.style.display = 'none';
+                    });
+                    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+                } else {
+                    // 點擊其他地方關閉所有 menu
+                    if (!e.target.closest('.menu')) {
+                        closeAllMenus();
+                    }
+                }
+            });
+
+            // 點擊重新命名
+            document.querySelectorAll('.rename-btn').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    currentRenameId = e.target.closest('.card').dataset.id;
+                    const filename = e.target.closest('.card').querySelector('.filename').textContent.trim();
+                    document.getElementById('rename-input').value = filename;
+                    document.getElementById('rename-modal').style.display = 'flex';
+                    closeAllMenus();
+                });
+            });
+
+            // 取消重新命名
+            document.getElementById('rename-cancel').addEventListener('click', () => {
+                document.getElementById('rename-modal').style.display = 'none';
+            });
+
+            // 確認重新命名
+            document.getElementById('rename-confirm').addEventListener('click', () => {
+                const newName = document.getElementById('rename-input').value.trim();
+                if (!newName) return alert('名稱不可空白');
+
+                fetch("{% url 'rename_pdf' %}", {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrftoken,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `id=${currentRenameId}&name=${encodeURIComponent(newName)}`
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            const filenameSpan = document.querySelector(`.card[data-id="${currentRenameId}"] .filename`);
+                            if(filenameSpan) filenameSpan.textContent = data.new_name;
+                            document.getElementById('rename-modal').style.display = 'none';
+                        } else {
+                            alert('重新命名失敗');
+                        }
+                    })
+                    .catch(() => alert('請求失敗，請稍後再試'));
+            });
+
+            // 點擊刪除
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    currentDeleteId = e.target.closest('.card').dataset.id;
+                    document.getElementById('delete-modal').style.display = 'flex';
+                    closeAllMenus();
+                });
+            });
+
+            // 取消刪除
+            document.getElementById('delete-cancel').addEventListener('click', () => {
+                document.getElementById('delete-modal').style.display = 'none';
+            });
+
+            // 確認刪除
+            document.getElementById('delete-confirm').addEventListener('click', () => {
+                fetch("{% url 'delete_pdf' %}", {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrftoken,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `id=${currentDeleteId}`
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            const card = document.querySelector(`.card[data-id="${currentDeleteId}"]`);
+                            if (card) card.remove();
+                            document.getElementById('delete-modal').style.display = 'none';
+                        } else {
+                            alert('刪除失敗');
+                        }
+                    })
+                    .catch(() => alert('請求失敗，請稍後再試'));
+            });
+
+            // 點擊 modal 背景區域時關閉
+            window.addEventListener('click', e => {
+                const renameModal = document.getElementById('rename-modal');
+                const deleteModal = document.getElementById('delete-modal');
+                if (e.target === renameModal) renameModal.style.display = 'none';
+                if (e.target === deleteModal) deleteModal.style.display = 'none';
+            });
+
+            function closeAllMenus() {
+                document.querySelectorAll('.card .menu').forEach(m => m.style.display = 'none');
+            }
+        });
+    </script>
+{% endblock %}

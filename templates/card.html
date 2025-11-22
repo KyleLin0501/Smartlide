@@ -1,0 +1,156 @@
+<div class="section-card card" data-id="{{ pdf.id }}">
+    <div class="thumb">
+        <a href="{% url 'open_pdf' pdf.id %}" target="_blank" rel="noopener noreferrer">
+            {% if pdf.thumbnail %}
+                <img src="{{ pdf.thumbnail.url }}" alt="縮圖">
+            {% else %}
+                <div class="no-thumb">無縮圖</div>
+            {% endif %}
+        </a>
+    </div>
+
+    <div class="caption d-flex justify-content-between align-items-start">
+        <div>
+            <a href="{% url 'open_pdf' pdf.id %}" target="_blank" rel="noopener noreferrer"
+               class="filename d-block">
+                {% if pdf.display_name %}
+                    {{ pdf.display_name }}
+                {% else %}
+                    {{ pdf.file.name|slice:'5:' }}
+                {% endif %}
+            </a>
+            {% if pdf.last_opened %}
+                <small class="text-muted d-block">上次開啟：{{ pdf.last_opened|date:"Y-m-d H:i" }}</small>
+            {% else %}
+                <small class="text-muted d-block">上傳時間：{{ pdf.uploaded_at|date:"Y-m-d H:i" }}</small>
+            {% endif %}
+        </div>
+
+        <div class="menu-wrapper position-relative">
+            <button class="menu-btn">⋮</button>
+            <div class="menu">
+                <button class="rename-btn">重新命名</button>
+                <button class="delete-btn">刪除</button>
+            </div>
+        </div>
+    </div>
+    {#<script>#}
+    {#        document.addEventListener('DOMContentLoaded', () => {#}
+    {#            const csrftoken = '{{ csrf_token }}';#}
+    {#            let currentRenameId = null;#}
+    {#            let currentDeleteId = null;#}
+    {##}
+    {#            // 切換卡片內的選單#}
+    {#            document.querySelectorAll('.menu-btn').forEach(btn => {#}
+    {#                btn.addEventListener('click', e => {#}
+    {#                    e.stopPropagation();#}
+    {#                    const menu = e.target.closest('.caption').querySelector('.menu');#}
+    {#                    document.querySelectorAll('.card .menu').forEach(m => {#}
+    {#                        if (m !== menu) m.style.display = 'none';#}
+    {#                    });#}
+    {#                    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';#}
+    {#                });#}
+    {#            });#}
+    {##}
+    {#            // 點擊其他地方時，關閉所有卡片選單#}
+    {#            document.addEventListener('click', () => {#}
+    {#                closeAllMenus();#}
+    {#            });#}
+    {##}
+    {#            // 點擊重新命名#}
+    {#            document.querySelectorAll('.rename-btn').forEach(btn => {#}
+    {#                btn.addEventListener('click', e => {#}
+    {#                    e.stopPropagation();#}
+    {#                    currentRenameId = e.target.closest('.card').dataset.id;#}
+    {#                    const filename = e.target.closest('.card').querySelector('.filename').textContent.trim();#}
+    {#                    document.getElementById('rename-input').value = filename;#}
+    {#                    document.getElementById('rename-modal').style.display = 'flex';#}
+    {#                    closeAllMenus();#}
+    {#                });#}
+    {#            });#}
+    {##}
+    {#            // 取消重新命名#}
+    {#            document.getElementById('rename-cancel').addEventListener('click', () => {#}
+    {#                document.getElementById('rename-modal').style.display = 'none';#}
+    {#            });#}
+    {##}
+    {#            // 確認重新命名#}
+    {#            document.getElementById('rename-confirm').addEventListener('click', () => {#}
+    {#                const newName = document.getElementById('rename-input').value.trim();#}
+    {#                if (!newName) return alert('名稱不可空白');#}
+    {##}
+    {#                fetch("{% url 'rename_pdf' %}", {#}
+    {#                    method: 'POST',#}
+    {#                    headers: {#}
+    {#                        'X-CSRFToken': csrftoken,#}
+    {#                        'Content-Type': 'application/x-www-form-urlencoded',#}
+    {#                    },#}
+    {#                    body: `id=${currentRenameId}&name=${encodeURIComponent(newName)}`#}
+    {#                })#}
+    {#                    .then(res => res.json())#}
+    {#                    .then(data => {#}
+    {#                        if (data.status === 'success') {#}
+    {#                            const filenameSpan = document.querySelector(`.card[data-id="${currentRenameId}"] .filename`);#}
+    {#                            filenameSpan.textContent = data.new_name;#}
+    {#                            document.getElementById('rename-modal').style.display = 'none';#}
+    {#                        } else {#}
+    {#                            alert('重新命名失敗');#}
+    {#                        }#}
+    {#                    })#}
+    {#                    .catch(() => alert('請求失敗，請稍後再試'));#}
+    {#            });#}
+    {##}
+    {#            // 點擊刪除#}
+    {#            document.querySelectorAll('.delete-btn').forEach(btn => {#}
+    {#                btn.addEventListener('click', e => {#}
+    {#                    e.stopPropagation();#}
+    {#                    currentDeleteId = e.target.closest('.card').dataset.id;#}
+    {#                    document.getElementById('delete-modal').style.display = 'flex';#}
+    {#                    closeAllMenus();#}
+    {#                });#}
+    {#            });#}
+    {##}
+    {#            // 取消刪除#}
+    {#            document.getElementById('delete-cancel').addEventListener('click', () => {#}
+    {#                document.getElementById('delete-modal').style.display = 'none';#}
+    {#            });#}
+    {##}
+    {#            // 確認刪除#}
+    {#            document.getElementById('delete-confirm').addEventListener('click', () => {#}
+    {#                fetch("{% url 'delete_pdf' %}", {#}
+    {#                    method: 'POST',#}
+    {#                    headers: {#}
+    {#                        'X-CSRFToken': csrftoken,#}
+    {#                        'Content-Type': 'application/x-www-form-urlencoded',#}
+    {#                    },#}
+    {#                    body: `id=${currentDeleteId}`#}
+    {#                })#}
+    {#                    .then(res => res.json())#}
+    {#                    .then(data => {#}
+    {#                        if (data.status === 'success') {#}
+    {#                            const card = document.querySelector(`.card[data-id="${currentDeleteId}"]`);#}
+    {#                            if (card) card.remove();#}
+    {#                            document.getElementById('delete-modal').style.display = 'none';#}
+    {#                        } else {#}
+    {#                            alert('刪除失敗');#}
+    {#                        }#}
+    {#                    })#}
+    {#                    .catch(() => alert('請求失敗，請稍後再試'));#}
+    {#            });#}
+    {##}
+    {#            // 點擊 modal 背景區域時關閉#}
+    {#            window.addEventListener('click', e => {#}
+    {#                const renameModal = document.getElementById('rename-modal');#}
+    {#                const deleteModal = document.getElementById('delete-modal');#}
+    {#                if (e.target === renameModal) renameModal.style.display = 'none';#}
+    {#                if (e.target === deleteModal) deleteModal.style.display = 'none';#}
+    {#            });#}
+    {##}
+    {#            // 專門用來關閉卡片中的所有 .menu#}
+    {#            function closeAllMenus() {#}
+    {#                document.querySelectorAll('.card .menu').forEach(m => m.style.display = 'none');#}
+    {#            }#}
+    {#        });#}
+    {#    </script>#}
+
+</div>
