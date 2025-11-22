@@ -21,12 +21,8 @@ gunicorn==22.0.0
 # --- 應用邏輯 (必要) ---
 requests==2.31.0
 ollama==0.1.8
-OpenCC==1.1.7
+OpenCC==1.1.9
 numpy==1.26.4
 pdfplumber==0.11.0
 pypdf==4.2.0
 Pillow==10.3.0
-
-# --- Google/Firebase (如果你有用到登入或雲端硬碟才留，沒用到可刪) ---
-# firebase-admin==6.5.0
-# google-cloud-storage==2.16.0
