@@ -20,8 +20,7 @@ logger = logging.getLogger("slides.whisper_processor")
 # 遠端連線設定 (請修改這裡)
 # ==========================================
 MAC_IP = "140.134.26.83"  # <--- 請改成 Mac Studio 的 IP
-WHISPER_API_URL = f"http://{MAC_IP}:9001/transcribe"
-
+WHISPER_API_URL = os.environ.get("WHISPER_URL", "http://140.134.26.83/transcribe")
 # 用於 LLM 判斷的執行緒池 (保留)
 _predict_executor = ThreadPoolExecutor(max_workers=4)
 

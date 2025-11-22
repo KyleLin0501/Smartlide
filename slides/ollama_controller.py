@@ -1,6 +1,7 @@
 import ollama
 import re
 from opencc import OpenCC
+import os
 import asyncio
 import logging
 import threading
@@ -15,7 +16,9 @@ selected_model = "llama3.1"
 # 1. 設定遠端 Mac Studio 連線資訊 (修改這裡)
 # ==========================================
 MAC_IP = "140.134.26.83"  # <--- 請務必改成 Mac Studio 的真實 IP
-OLLAMA_HOST = f"http://{MAC_IP}:11434"
+OLLAMA_HOST = os.environ.get("OLLAMA_URL", "http://140.134.26.83:11434")
+
+
 
 # 初始化異步客戶端
 try:

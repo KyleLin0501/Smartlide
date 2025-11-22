@@ -6,7 +6,7 @@ pytz>=2024.1
 
 # --- WebSocket / Channels (即時通訊必要) ---
 channels>=4.0
-channels-redis>=4.2.0
+
 daphne>=4.1.0
 redis>=5.0
 Twisted>=24.3.0

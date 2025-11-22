@@ -28,7 +28,6 @@ SECRET_KEY = 'django-insecure--la%(3sc$ellcoe-^c&_5d0v@u6mcoa28gf)13vn@2$p*!g_m7
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-REDIS_URL = os.environ.get("REDIS_URL")
 
 CSRF_TRUSTED_ORIGINS = [
     "https://smartlide.onrender.com",
@@ -36,30 +35,6 @@ CSRF_TRUSTED_ORIGINS = [
 
 ALLOWED_HOSTS = ['*']
 
-if REDIS_URL:
-    # === 雲端環境 (Render) ===
-    # 當部署到 Render 時，會自動讀取你設定的環境變數
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [REDIS_URL],
-                # 如果是用 Upstash (rediss://)，通常需要忽略證書驗證，或者是標準設定即可
-                # 如果遇到 SSL 錯誤，可以嘗試加入: "ssl_cert_reqs": None
-            },
-        },
-    }
-else:
-    # === 本地環境 (Local) ===
-    # 當你在自己電腦開發時，連線到本機的 Redis
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [("127.0.0.1", 6379)],
-            },
-        },
-    }
 
 # Application definition
 
@@ -188,9 +163,8 @@ INSTALLED_APPS += ["channels"]
 ASGI_APPLICATION = "Slide.asgi.application"
 
 
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels_redis.core.RedisChannelLayer",
-#         "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-#     },
-# }
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}
