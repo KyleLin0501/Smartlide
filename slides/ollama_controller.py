@@ -5,24 +5,28 @@ import os
 import asyncio
 import logging
 import threading
+import numpy as np
+import jieba
+import jieba.analyse
+from text2vec import SentenceModel
+from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger("slides.ollama_controller")
 
-# 初始化 OpenCC 與模型
-converter = OpenCC("s2t")
+# ==========================================
+# 初始化全域變數
+# ==========================================
+converter_s2t = OpenCC("s2t")  # 輸出用
+converter_t2s = OpenCC("t2s")  # 演算法內部處理用 (簡體對模型支援較好)
 selected_model = "llama3.1"
 
 # ==========================================
-# 1. 設定遠端 Mac Studio 連線資訊 (修改這裡)
+# 設定遠端 Mac Studio 連線資訊
 # ==========================================
-MAC_IP = "140.134.26.83"  # <--- 請務必改成 Mac Studio 的真實 IP
-OLLAMA_HOST = os.environ.get("OLLAMA_URL", "http://140.134.26.83:11434")
+MAC_IP = "140.134.26.83"
+OLLAMA_HOST = os.environ.get("OLLAMA_URL", f"http://{MAC_IP}:11434")
 
-
-
-# 初始化異步客戶端
 try:
-    # 指定 host 連線到遠端
     async_client = ollama.AsyncClient(host=OLLAMA_HOST)
     logger.info(f"Ollama AsyncClient initialized connecting to {OLLAMA_HOST}")
 except Exception as e:
@@ -30,41 +34,54 @@ except Exception as e:
     async_client = None
 
 # ==========================================
-# 執行緒局部變數 (用於儲存每個連線的螢光筆狀態)
-# 在 consumers.py 中，每個連線都有獨立的 command_worker thread
-# 所以這裡使用 threading.local 是安全的
+# 懶加載模型機制 (避免啟動時記憶體爆掉)
+# ==========================================
+_CACHED_MODEL = None
+
+
+def get_embed_model():
+    """只有在真正需要摘要時才載入模型"""
+    global _CACHED_MODEL
+    if _CACHED_MODEL is None:
+        logger.info("Initializing SentenceModel (Lazy Loading)...")
+        try:
+            _CACHED_MODEL = SentenceModel('shibing624/text2vec-base-chinese')
+            logger.info("SentenceModel loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load SentenceModel (Likely OOM): {e}")
+            return None
+    return _CACHED_MODEL
+
+
+# ==========================================
+# 簡報控制相關 (保留原功能)
 # ==========================================
 thread_data = threading.local()
 
+
 def _get_highlight_buffer():
-    """安全地獲取當前執行緒的 highlight buffer"""
     if not hasattr(thread_data, 'highlight_buffer'):
         thread_data.highlight_buffer = None
     return thread_data.highlight_buffer
+
 
 def _set_highlight_buffer(val):
     thread_data.highlight_buffer = val
 
 
 def clean_mark_text(text: str) -> str:
-    """移除指令關鍵詞，保留要標記的內容"""
-    text = converter.convert(text.strip())
-    keywords = [
-        "畫底線", "畫重點", "標記重點", "底線", "畫線", "重點",
-        "畫螢光筆", "用螢光筆", "螢光筆", "highlight", "underline", "mark"
-    ]
+    text = converter_s2t.convert(text.strip())
+    keywords = ["畫底線", "畫重點", "標記重點", "底線", "畫線", "重點", "畫螢光筆", "用螢光筆", "螢光筆", "highlight",
+                "underline", "mark"]
     for kw in keywords:
-        if text.lower().startswith(kw):
-            return text[len(kw):].strip()
-        if text.lower().endswith(kw):
-            return text[:-len(kw)].strip()
+        if text.lower().startswith(kw): return text[len(kw):].strip()
+        if text.lower().endswith(kw): return text[:-len(kw)].strip()
     return text
 
 
 def chinese_to_arabic(cn: str):
-    """中文數字轉阿拉伯數字"""
-    table = {"零": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
-             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    table = {"零": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+             "十": 10}
     if cn.isdigit(): return int(cn)
     if cn in table: return table[cn]
     if "十" in cn:
@@ -76,83 +93,48 @@ def chinese_to_arabic(cn: str):
 
 
 async def predict_slide_action(text: str) -> str:
-    """
-    結合本地端的 Prompt 與邏輯，判斷簡報操作指令
-    """
-    if async_client is None:
-        return "none"
+    """判斷簡報操作指令"""
+    if async_client is None: return "none"
 
-    # 1. 繁簡轉換與預處理
-    text = converter.convert(text.strip())
-    text_lower = text.lower()
-    text_lower = text_lower.replace("under line", "underline").replace("high light", "highlight")
-    text_lower = text_lower.replace("highlighted", "highlight")
+    text = converter_s2t.convert(text.strip())
+    text_lower = text.lower().replace("under line", "underline").replace("high light", "highlight").replace(
+        "highlighted", "highlight")
 
-    # =================================================================
-    # 包夾式螢光筆邏輯 (Wrapper Logic)
-    # =================================================================
+    # 包夾式邏輯
     parts = re.split(r'(highlight|螢光筆)', text_lower, flags=re.IGNORECASE)
     current_buffer = _get_highlight_buffer()
 
     if len(parts) > 1 or current_buffer is not None:
         for i, part in enumerate(parts):
-            is_keyword = (i % 2 == 1)
-
-            if is_keyword:
-                # 遇到關鍵字：切換狀態
+            if i % 2 == 1:  # 關鍵字
                 if current_buffer is None:
-                    current_buffer = "" # 開始錄製
+                    current_buffer = ""
                 else:
-                    # 停止錄製並送出
-                    final_text = clean_mark_text(current_buffer)
+                    final = clean_mark_text(current_buffer)
                     _set_highlight_buffer(None)
-                    return f"H:{final_text}"
+                    return f"H:{final}"
             else:
-                # 遇到文字：若在錄製中則累積
-                if current_buffer is not None:
-                    current_buffer += part
-
+                if current_buffer is not None: current_buffer += part
         _set_highlight_buffer(current_buffer)
+        if current_buffer is not None: return "S"
 
-        # 若還在錄製中，回傳 S 等待下一句
-        if current_buffer is not None:
-            return "S"
-
-    # =================================================================
-    # LLM 判斷邏輯
-    # =================================================================
+    # LLM 邏輯
     prompt = (
         "你是簡報輔助系統，請根據使用者的語句判斷是否為操作指令。\n"
-        "請嚴格遵守以下規則：\n"
-        "1. 若語句只是講述內容（朗讀、解釋），請輸出 'S'。\n"
-        "2. 若語句提到「下一頁」「往後」「next page」「continue」等，輸出 'N'。\n"
-        "3. 若語句提到「上一頁」「回去」「previous page」「go back」等，輸出 'P'。\n"
-        "4. 若語句包含「第X頁」「page X」「go to page X」等，輸出數字 X。\n"
-        "5. 若語句包含 'underline' 或 中文的「畫底線」「底線」「畫重點」「標記重點」 → 輸出 'U'。\n"
-        "6. 若語句包含 'highlight' 或 中文的「畫螢光筆」「螢光筆」 → 輸出 'H'。\n"
-        "7. 若模糊或無法確定，輸出 'S'。\n"
-        "輸出只能是以下其中之一：'N'、'P'、'S'、'U'、'H' 或 數字。禁止輸出其他內容。"
+        "規則：\n1. 純講述輸出 'S'。\n2. 下一頁輸出 'N'。\n3. 上一頁輸出 'P'。\n4. 指定頁數輸出數字。\n"
+        "5. 畫底線輸出 'U'。\n6. 螢光筆輸出 'H'。\n7. 不確定輸出 'S'。\n只能輸出代碼。"
     )
-
     try:
-        response = await async_client.chat(
-            model=selected_model,
-            messages=[
-                {'role': 'system', 'content': prompt},
-                {'role': 'user', 'content': text}
-            ]
-        )
-        output = response.get('message', {}).get('content', '').strip()
-        clean_output = re.sub(r'[^a-zA-Z0-9]', '', output).upper()
-
+        response = await async_client.chat(model=selected_model, messages=[{'role': 'system', 'content': prompt},
+                                                                           {'role': 'user', 'content': text}])
+        clean_output = re.sub(r'[^a-zA-Z0-9]', '', response.get('message', {}).get('content', '').strip()).upper()
     except Exception as e:
         logger.error(f"Ollama error: {e}")
         clean_output = "S"
 
-    # 後處理
-    if clean_output == 'U' or 'underline' in text_lower or any(k in text_lower for k in ['畫底線', '底線', '畫重點']):
+    if clean_output == 'U' or 'underline' in text_lower or '底線' in text_lower:
         return f"U:{clean_mark_text(text)}"
-    elif clean_output == 'H' or 'highlight' in text_lower or any(k in text_lower for k in ['螢光筆', '畫螢光筆']):
+    elif clean_output == 'H' or 'highlight' in text_lower or '螢光筆' in text_lower:
         return f"H:{clean_mark_text(text)}"
     elif clean_output == 'N':
         return "next"
@@ -169,25 +151,118 @@ async def predict_slide_action(text: str) -> str:
     return "none"
 
 
-# --- 摘要生成功能 ---
+# ==========================================
+# 語義摘要演算法 (CPU 密集型邏輯)
+# ==========================================
+def split_sentences(text):
+    def clean_heading_prefix(sentence):
+        return re.sub(r'^\s*(第?[一二三四五六七八九十\d]+[、.)：:]?|[一二三四五六七八九十]+\s*[、：])\s*', '', sentence)
+
+    raw = re.split(r'(?<=[。！？……….])\s*', text)
+    cleaned = []
+    for s in raw:
+        s = s.strip()
+        if not s or re.fullmatch(r'\s*(第?[一二三四五六七八九十\d]+[、.)：:]?|[一二三四五六七八九十]+\s*[、：])\s*',
+                                 s): continue
+        cleaned.append(clean_heading_prefix(s))
+    return cleaned
+
+
+def _run_semantic_extraction(full_text: str, top_k=5, top_n=3) -> str:
+    """
+    這是同步函數，將被 asyncio.to_thread 呼叫。
+    負責：斷詞 -> 向量化 -> 分群 -> 提取重點
+    """
+    model = get_embed_model()
+    # 如果模型載入失敗 (OOM)，回傳截斷後的文字作為備案
+    if not model:
+        logger.warning("Embedding model not loaded, falling back to truncation.")
+        return full_text[:5000]
+
+    try:
+        # 1. 轉簡體 (Text2Vec 效果較好)
+        text_sim = converter_t2s.convert(full_text)
+
+        # 2. 斷句
+        sentences = split_sentences(text_sim)
+        if len(sentences) < 5: return full_text  # 內容太少不需摘要
+
+        # 3. 提取關鍵詞 (作為標籤)
+        keywords = jieba.analyse.textrank(text_sim, topK=top_k, withWeight=False)
+        if not keywords: keywords = ["摘要", "重點", "結論"]
+
+        label_names = {i: kw for i, kw in enumerate(keywords)}
+        label_texts = list(label_names.values())
+
+        # 4. 向量化
+        label_emb = model.encode(label_texts, normalize_embeddings=True)
+        sent_emb = model.encode(sentences, normalize_embeddings=True)
+
+        # 5. 分類 (Cosine Similarity)
+        labels = []
+        for se in sent_emb:
+            sims = cosine_similarity([se], label_emb).flatten()
+            labels.append(sims.argmax())
+
+        # 6. 分群摘要
+        summary_text = ""
+        processed_labels = set(labels)
+
+        for label_id in processed_labels:
+            indices = [i for i, x in enumerate(labels) if x == label_id]
+            if not indices: continue
+
+            cluster_emb = sent_emb[indices]
+            centroid = np.mean(cluster_emb, axis=0).reshape(1, -1)
+            sims = cosine_similarity(cluster_emb, centroid).flatten()
+
+            # 取該群組分數最高的 top_n 句
+            top_indices = sims.argsort()[-top_n:][::-1]
+
+            topic_name = label_names.get(label_id, "重點")
+            # 組合句子並轉回繁體
+            topic_content = "".join([sentences[indices[i]] for i in top_indices])
+
+            summary_text += f"【{converter_s2t.convert(topic_name)}】\n{converter_s2t.convert(topic_content)}\n\n"
+
+        return summary_text
+
+    except Exception as e:
+        logger.error(f"Algorithm execution failed: {e}")
+        return full_text[:5000]  # 出錯時回退
+
+
+# ==========================================
+# 最終摘要入口
+# ==========================================
 async def generate_meeting_summary(transcript: str, pdf_text: str) -> str:
     if async_client is None:
         return "錯誤：LLM 用戶端未初始化。"
 
-    logger.info(f"Generating summary. Transcript len: {len(transcript)}, PDF len: {len(pdf_text)}")
+    # 合併文本進行處理
+    combined_input = f"{pdf_text}\n{transcript}"
+    logger.info(f"Generating summary. Input length: {len(combined_input)}")
 
+    # 1. 執行語義提取 (使用 to_thread 避免卡死 WebSocket)
+    # 這裡會跑你提供的 Text2Vec 演算法
+    try:
+        extracted_content = await asyncio.to_thread(
+            _run_semantic_extraction,
+            combined_input,
+            top_k=6,  # 提取 6 個主題
+            top_n=4  # 每個主題保留 4 句話
+        )
+        logger.info(f"Semantic extraction complete. Output length: {len(extracted_content)}")
+    except Exception as e:
+        logger.error(f"Extraction thread failed: {e}")
+        extracted_content = combined_input[:5000]
+
+    # 2. 丟給 Ollama 整理成 Markdown
     prompt = (
-        "你是一位專業的會議記錄員。請根據「PDF 簡報內容」與講者的「語音逐字稿」，"
-        "整理出一份 Markdown 格式的會議/簡報摘要。\n\n"
-        "格式要求：\n"
-        "1. **主題標題**\n"
-        "2. **詳細內容摘要**\n"
-        "3. **結論或待辦**\n\n"
-        "--- [PDF 內容] ---\n"
-        f"{pdf_text[:10000]}"
-        "\n--- [語音逐字稿] ---\n"
-        f"{transcript[:10000]}"
-        "\n請輸出摘要："
+        "你是一位專業的會議記錄員。請根據以下經過演算法提取的「重點語句片段」，"
+        "整理出一份通順、邏輯清晰的 Markdown 格式會議摘要。\n\n"
+        f"{extracted_content}"
+        "\n\n請輸出繁體中文摘要："
     )
 
     try:
@@ -197,5 +272,5 @@ async def generate_meeting_summary(transcript: str, pdf_text: str) -> str:
         )
         return response.get('message', {}).get('content', '')
     except Exception as e:
-        logger.error(f"Summary generation failed: {e}")
+        logger.error(f"Ollama Summary generation failed: {e}")
         return f"摘要生成失敗: {e}"
