@@ -179,10 +179,6 @@ async def generate_meeting_summary(transcript: str, pdf_text: str) -> str:
     prompt = (
         "你是一位專業的會議記錄員。請根據「PDF 簡報內容」與講者的「語音逐字稿」，"
         "整理出一份 Markdown 格式的會議/簡報摘要。\n\n"
-        "格式要求：\n"
-        "1. **主題標題**\n"
-        "2. **詳細內容摘要**\n"
-        "3. **結論或待辦**\n\n"
         "--- [PDF 內容] ---\n"
         f"{pdf_text[:10000]}"
         "\n--- [語音逐字稿] ---\n"
