@@ -1,9 +1,11 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>語音控制 PDF 簡報</title>
+    <link rel="icon" href="{% static 'img/Logo_Home.png' %}" type="image/png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -52,7 +54,12 @@
 <script type="module">
     const pdfId = "{{ pdf_id }}";
     let rawUrl = "{{ pdf_url }}";
-    const pdfUrl = rawUrl.replace("http://", "https://");
+    // 修改：只有當網頁本身是 https 時，才強制把 PDF 網址轉成 https
+    // 如果在本地 (http)，就保持原樣
+    let pdfUrl = rawUrl;
+    if (window.location.protocol === 'https:') {
+        pdfUrl = rawUrl.replace("http://", "https://");
+    }
 
     let pdfDoc = null;
     let pageNum = 1;
