@@ -35,7 +35,3 @@ pdf2image==1.17.0
 PyMuPDF==1.26.5
 
 
-jieba
-text2vec
-scikit-learn
-torch==2.2.2
