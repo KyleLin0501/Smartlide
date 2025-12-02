@@ -81,36 +81,73 @@ def chinese_to_arabic(cn: str):
 # 功能 1: 簡報指令判斷 (直接連 Ollama 11434，保持快速)
 # ==========================================
 async def predict_slide_action(text: str) -> str:
+    """
+    預測簡報動作指令
+    包含：下一頁、上一頁、跳頁、螢光筆(Highlight)、底線(Underline)
+    """
     if async_client is None:
         return "none"
 
+    # 1. 基礎清理
     text = converter.convert(text.strip())
-    text_lower = text.lower()
-    text_lower = text_lower.replace("under line", "underline").replace("high light", "highlight")
-    text_lower = text_lower.replace("highlighted", "highlight")
 
-    # 包夾式螢光筆邏輯
-    parts = re.split(r'(highlight|螢光筆)', text_lower, flags=re.IGNORECASE)
+    # 2. 【關鍵步驟】使用 Regex 進行「標準化」替換
+    # flags=re.IGNORECASE 會忽略大小寫
+    # \s* 代表中間可以有 0 到多個空白 (handling "under line", "underline", "High light")
+
+    # 處理 Highlight 系列 (high light, HighLight, highlighted -> highlight)
+    text = re.sub(r'high\s*light(ed)?', 'highlight', text, flags=re.IGNORECASE)
+
+    # 處理 Underline 系列 (under line, UnderLine -> underline)
+    text = re.sub(r'under\s*line', 'underline', text, flags=re.IGNORECASE)
+
+    # 3. 轉為小寫
+    text_lower = text.lower()
+
+    # --- 包夾式邏輯 (支援 Highlight 與 Underline) ---
+
+    # 定義觸發關鍵字 (包含英文標準字與中文)
+    triggers = ['highlight', '螢光筆', 'underline', '畫底線', '底線']
+
+    # 製作 Regex Pattern: (highlight|螢光筆|underline|畫底線|底線)
+    trigger_pattern = f"({'|'.join(triggers)})"
+
+    # 切分字串，保留分隔符
+    parts = re.split(trigger_pattern, text_lower)
+
     current_buffer = _get_highlight_buffer()
 
+    # 如果切分出超過一段 (代表有關鍵字)，或是目前正在 Buffer 模式中
     if len(parts) > 1 or current_buffer is not None:
         for i, part in enumerate(parts):
-            is_keyword = (i % 2 == 1)
-            if is_keyword:
+            # 檢查 part 是否為關鍵字
+            if part in triggers:
                 if current_buffer is None:
+                    # --- [模式開啟] ---
                     current_buffer = ""
                 else:
+                    # --- [模式關閉] ---
                     final_text = clean_mark_text(current_buffer)
                     _set_highlight_buffer(None)
-                    return f"H:{final_text}"
+
+                    # 判斷是用什麼關鍵字結束的，決定回傳 U 還是 H
+                    if part in ['underline', '畫底線', '底線']:
+                        return f"U:{final_text}"
+                    else:
+                        return f"H:{final_text}"
             else:
+                # 累積內容 (非關鍵字的部分)
                 if current_buffer is not None:
                     current_buffer += part
+
+        # 更新 Buffer 狀態
         _set_highlight_buffer(current_buffer)
+
+        # 如果還在 buffer 中 (只講了一次關鍵字)，回傳 S 讓文字繼續顯示
         if current_buffer is not None:
             return "S"
 
-    # LLM 判斷邏輯
+    # --- LLM 判斷邏輯 (處理單次指令或其他意圖) ---
     prompt = (
         "你是簡報輔助系統，請根據使用者的語句判斷是否為操作指令。\n"
         "請嚴格遵守以下規則：\n"
@@ -139,10 +176,16 @@ async def predict_slide_action(text: str) -> str:
         logger.error(f"Ollama error: {e}")
         clean_output = "S"
 
+    # --- 後處理與分派 ---
+
+    # 判斷底線 (LLM 輸出 U 或 關鍵字匹配)
     if clean_output == 'U' or 'underline' in text_lower or any(k in text_lower for k in ['畫底線', '底線', '畫重點']):
         return f"U:{clean_mark_text(text)}"
+
+    # 判斷螢光筆 (LLM 輸出 H 或 關鍵字匹配)
     elif clean_output == 'H' or 'highlight' in text_lower or any(k in text_lower for k in ['螢光筆', '畫螢光筆']):
         return f"H:{clean_mark_text(text)}"
+
     elif clean_output == 'N':
         return "next"
     elif clean_output == 'P':
@@ -150,13 +193,13 @@ async def predict_slide_action(text: str) -> str:
     elif re.match(r'^\d+$', clean_output):
         return f"goto:{clean_output}"
 
+    # 中文數字頁碼判斷 (例如：第二十頁)
     cn_match = re.search(r"(第)?([零一二兩三四五六七八九十]+)頁", text)
     if cn_match:
         n = chinese_to_arabic(cn_match.group(2))
         if n: return f"goto:{n}"
 
     return "none"
-
 
 # ==========================================
 # 功能 2: 會議摘要 (透過 HTTP 呼叫遠端 AI Server)
