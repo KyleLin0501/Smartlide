@@ -25,6 +25,7 @@ from django.urls import re_path
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('index/', views.index, name='index'),
 
     path('recent/', views.recent, name='recent'),
     path('open/<int:pdf_id>/', views.open_pdf, name='open_pdf'),
