@@ -157,7 +157,7 @@ def process_audio(consumer, loop: asyncio.AbstractEventLoop, stop_event: threadi
                 response = requests.post(
                     WHISPER_API_URL,
                     files={"file": audio_bytes},
-                    timeout=5
+                    timeout=10
                 )
 
                 if response.status_code == 200:

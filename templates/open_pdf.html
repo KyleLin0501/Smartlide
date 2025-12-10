@@ -213,6 +213,21 @@
             content.type = 'hidden'; content.name = 'content'; content.value = data.content;
             form.appendChild(content);
 
+            // ★★★ 新增這段：傳遞 pdf_url ★★★
+            const pdfUrlInput = document.createElement('input');
+            pdfUrlInput.type = 'hidden';
+            pdfUrlInput.name = 'pdf_url';
+            // 這裡直接使用 Django 渲染在頁面上的變數
+            pdfUrlInput.value = "{{ pdf_url }}";
+            form.appendChild(pdfUrlInput);
+            // ★★★ 結束新增 ★★★
+
+            const pdfIdInput = document.createElement('input');
+            pdfIdInput.type = 'hidden';
+            pdfIdInput.name = 'pdf_id';
+            pdfIdInput.value = "{{ pdf_id }}"; // 確保 presentation 頁面有這個變數
+            form.appendChild(pdfIdInput);
+
             document.body.appendChild(form);
             form.submit();
             return;

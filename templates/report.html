@@ -15,6 +15,8 @@
         .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; text-decoration: none; color: white; transition: 0.3s; }
         .btn-copy { background-color: #007bff; } .btn-copy:hover { background-color: #0056b3; }
         .btn-back { background-color: #6c757d; } .btn-back:hover { background-color: #545b62; }
+        .btn-download { background-color: #28a745; }
+        .btn-download:hover { background-color: #218838; }
         #report-content h2 { border-bottom: 1px solid #eee; padding-bottom: 8px; margin-top: 25px; }
         #report-content ul { padding-left: 25px; }
         #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 2px; padding: 16px; position: fixed; z-index: 1; left: 50%; bottom: 30px; transform: translateX(-50%); }
@@ -27,6 +29,13 @@
 <div class="container">
     <div class="btn-group">
         <a href="/" class="btn btn-back">回首頁</a>
+
+        {% if pdf_id %}
+            <a href="{% url 'download_annotated' pdf_id %}" class="btn btn-download" download>下載標記版簡報</a>
+        {% elif pdf_url %}
+            <a href="{{ pdf_url }}" class="btn btn-download" download target="_blank">下載原始簡報</a>
+        {% endif %}
+
         <button class="btn btn-copy" onclick="copyContent()">複製 Markdown 內容</button>
     </div>
     <h1>📄 會議摘要報告</h1>

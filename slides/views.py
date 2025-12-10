@@ -19,6 +19,12 @@ from django.conf import settings
 from .models import UploadedPDF
 from .pdf_converter import convert_pdf_to_markdown
 
+import io
+import fitz  # PyMuPDF
+from django.http import FileResponse, HttpResponse
+from django.shortcuts import get_object_or_404
+from slides.models import UploadedPDF, Mark  # ★ 請替換成您實際的 Model 名稱
+
 # 設定 Logger
 logger = logging.getLogger(__name__)
 
@@ -260,7 +266,7 @@ def get_mark_positions(request, pdf_id, page_number):
 
 # API: 接收指令並計算座標儲存
 @csrf_exempt
-def apply_page_action(request, pdf_id):
+def apply_page_action_OLD_UNUSED(request, pdf_id):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'POST only'}, status=405)
 
@@ -415,5 +421,150 @@ def report_view(request):
     if request.method == "POST":
         # 從 form 接收 content
         content = request.POST.get('content', '')
-        return render(request, 'report.html', {'content': content})
+        pdf_url = request.POST.get('pdf_url')  # ★ 接收 pdf_url
+        pdf_id = request.POST.get('pdf_id')  # ★ 接收 ID
+        context = {
+            'content': content,
+            'pdf_url': pdf_url,  # ★ 將 pdf_url 加入 context 傳給模板
+            'pdf_id': pdf_id  # ★ 傳給模板
+        }
+        return render(request, 'report.html', context)
     return redirect('home')
+
+
+@csrf_exempt
+def mark_pdf_api(request, pdf_id):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            print(f"🔥 [API] 收到畫記請求 PDF ID: {pdf_id}, Data: {data}")
+
+            pdf_record = UploadedPDF.objects.get(pk=pdf_id)
+            page_num = int(data.get('page', 0))
+            text_to_find = data.get('text', '').strip()
+            mark_type = data.get('type', 'R')
+
+            # 開啟 PDF 計算座標
+            doc = fitz.open(pdf_record.file.path)
+
+            if page_num < 0 or page_num >= len(doc):
+                doc.close()
+                return JsonResponse({'status': 'error', 'message': '頁碼錯誤'})
+
+            page = doc[page_num]
+            w, h = page.rect.width, page.rect.height
+
+            # 1. 嘗試搜尋文字
+            found_instances = page.search_for(text_to_find)
+
+            # 2. 如果精確搜尋失敗，嘗試只搜尋前兩個字 (模糊搜尋)
+            if not found_instances and len(text_to_find) >= 2:
+                print(f"⚠️ 精確搜尋失敗，嘗試搜尋前兩個字: {text_to_find[:2]}")
+                found_instances = page.search_for(text_to_find[:2])
+
+            created_marks = []
+
+            # 3. 判斷是否找到
+            if found_instances:
+                print(f"✅ 找到 {len(found_instances)} 處文字匹配，存入資料庫...")
+                for inst in found_instances:
+                    # 轉成比例座標 (0.0 ~ 1.0)
+                    rect_ratio = [inst.x0 / w, inst.y0 / h, inst.x1 / w, inst.y1 / h]
+
+                    Mark.objects.create(
+                        pdf=pdf_record,
+                        page=page_num,
+                        type=mark_type,
+                        rect=rect_ratio,
+                        content=text_to_find
+                    )
+                    created_marks.append({'rect': rect_ratio, 'type': mark_type})
+            else:
+                # ★★★ 強制保底機制 (關鍵) ★★★
+                # 如果真的找不到字，強制在左上角存一個座標，確保資料庫有東西
+                print(f"❌ 完全找不到文字 '{text_to_find}'，執行【強制存檔】")
+
+                # 建立一個左上角的預設框框
+                fallback_rect = [0.1, 0.1, 0.5, 0.2]
+
+                Mark.objects.create(
+                    pdf=pdf_record,
+                    page=page_num,
+                    type=mark_type,
+                    rect=fallback_rect,
+                    content=f"未找到: {text_to_find}"
+                )
+                created_marks.append({'rect': fallback_rect, 'type': mark_type})
+
+            doc.close()
+            return JsonResponse({'status': 'success', 'marks': created_marks})
+
+        except Exception as e:
+            print(f"❌ API Error: {e}")
+            return JsonResponse({'status': 'error', 'message': str(e)})
+
+    return JsonResponse({'status': 'error'})
+
+
+# ------------------------------------------------------------------
+# API 2: 下載合成後的 PDF
+# ------------------------------------------------------------------
+def download_annotated_pdf(request, pdf_id):
+    print(f"📥 [Download] 開始準備下載 PDF ID: {pdf_id}")
+
+    pdf_record = get_object_or_404(UploadedPDF, pk=pdf_id)
+    marks = Mark.objects.filter(pdf=pdf_record)
+
+    print(f"📊 資料庫中共有 {marks.count()} 筆標記")
+
+    # 開啟原始 PDF
+    try:
+        pdf_doc = fitz.open(pdf_record.file.path)
+    except Exception as e:
+        return HttpResponse(f"找不到原始檔案: {e}", status=404)
+
+    draw_count = 0
+
+    # 開始繪圖
+    for mark in marks:
+        try:
+            page_idx = int(mark.page)
+            if 0 <= page_idx < len(pdf_doc):
+                page = pdf_doc[page_idx]
+                w, h = page.rect.width, page.rect.height
+
+                r = mark.rect  # 取出比例座標
+
+                # 防呆：確保座標格式正確
+                if not isinstance(r, list) or len(r) != 4:
+                    continue
+
+                # 轉回絕對座標
+                rect_coords = fitz.Rect(r[0] * w, r[1] * h, r[2] * w, r[3] * h)
+
+                if mark.type == 'H':  # 螢光筆
+                    shape = page.new_shape()
+                    shape.draw_rect(rect_coords)
+                    shape.finish(color=(1, 1, 0), fill=(1, 1, 0), fill_opacity=0.3, width=0)
+                    shape.commit()
+                else:  # 紅框
+                    shape = page.new_shape()
+                    shape.draw_rect(rect_coords)
+                    shape.finish(color=(1, 0, 0), width=3)  # 線條粗度 3
+                    shape.commit()
+
+                draw_count += 1
+        except Exception as e:
+            print(f"繪圖錯誤 (Mark ID {mark.id}): {e}")
+
+    print(f"🖊️ 成功繪製了 {draw_count} 個標記")
+
+    # 輸出檔案
+    buffer = io.BytesIO()
+    # deflate=True 壓縮檔案，garbage=4 清理垃圾數據
+    pdf_doc.save(buffer, garbage=4, deflate=True)
+    pdf_doc.close()
+    buffer.seek(0)
+
+    filename = f"Annotated_{pdf_record.display_name}.pdf"
+    return FileResponse(buffer, as_attachment=True, filename=filename)

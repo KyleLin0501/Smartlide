@@ -43,10 +43,12 @@ urlpatterns = [
     # 圖片獲取 API
     path('api/page/<int:pdf_id>/<int:page_number>/', views.get_annotated_page_image, name='get_page_image'),
     # 畫記 API
-    path('api/mark/<int:pdf_id>/', views.apply_page_action, name='apply_mark_action'),
-    path('api/mark/<int:pdf_id>/', views.apply_page_action, name='apply_page_action'),
+    # path('api/mark/<int:pdf_id>/', views.apply_page_action, name='apply_mark_action'),
+    # path('api/mark/<int:pdf_id>/', views.apply_page_action, name='apply_page_action'),
+    path('api/mark/<int:pdf_id>/', views.mark_pdf_api, name='mark_pdf_api'),
     path('api/get_mark_positions/<int:pdf_id>/<int:page_number>/', views.get_mark_positions, name='get_mark_positions'),
     path('report/', views.report_view, name='report_view'),
+    path('download_annotated/<int:pdf_id>/', views.download_annotated_pdf, name='download_annotated'),
 ]
 
 # 加入這段：強制 Django 在生產環境也能讀取 media 檔案

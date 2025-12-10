@@ -77,3 +77,16 @@ class UploadedPDF(models.Model):
         verbose_name = "上傳 PDF"
         verbose_name_plural = "上傳 PDF 列表"
 
+
+class Mark(models.Model):
+    # 這是用來儲存畫記座標的
+    pdf = models.ForeignKey(UploadedPDF, on_delete=models.CASCADE, related_name='marks')
+    page = models.IntegerField()  # 頁碼 (0 開始)
+    type = models.CharField(max_length=5)  # 'H' (螢光筆) 或 'R' (紅框)
+    rect = models.JSONField() # 儲存座標 [x1, y1, x2, y2] 的比例
+    content = models.TextField(blank=True, null=True) # 標記文字
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Mark: Page {self.page} - {self.content}"
+
