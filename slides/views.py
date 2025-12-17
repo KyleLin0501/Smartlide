@@ -251,16 +251,31 @@ def open_pdf(request, pdf_id):
 
 
 # API: 前端 Canvas 請求畫記座標
+# views.py
+
 def get_mark_positions(request, pdf_id, page_number):
+    """
+    從資料庫讀取畫記位置，回傳給前端渲染
+    """
     try:
-        state = get_drawing_state(pdf_id)
-        rects_state = state.get('rects', {})
+        # 1. 改為查詢資料庫 (Mark Model)
+        # 注意：前端傳來的 page_number 是 int，資料庫存的也是 int
+        marks = Mark.objects.filter(pdf__id=pdf_id, page=page_number)
 
-        # 支援 int key
-        page_rects = rects_state.get(page_number, [])
+        rects_data = []
+        for m in marks:
+            # 將資料庫物件轉換為前端看得懂的 JSON 格式
+            rects_data.append({
+                'rect': m.rect,  # 比例座標 [x1, y1, x2, y2]
+                'type': m.type,  # 'H' 或 'U' 或 'R'
+                'text': m.content
+            })
 
-        return JsonResponse({'status': 'success', 'rects': page_rects})
+        # 2. 回傳結果
+        return JsonResponse({'status': 'success', 'rects': rects_data})
+
     except Exception as e:
+        print(f"❌ 讀取畫記錯誤: {e}")
         return JsonResponse({'status': 'error', 'message': str(e)})
 
 
@@ -441,6 +456,7 @@ def mark_pdf_api(request, pdf_id):
 
             pdf_record = UploadedPDF.objects.get(pk=pdf_id)
             page_num = int(data.get('page', 0))
+            # strip() 會去除前後空白，這是正確的，避免語音多產生空白導致不匹配
             text_to_find = data.get('text', '').strip()
             mark_type = data.get('type', 'R')
 
@@ -454,19 +470,14 @@ def mark_pdf_api(request, pdf_id):
             page = doc[page_num]
             w, h = page.rect.width, page.rect.height
 
-            # 1. 嘗試搜尋文字
+            # 1. 搜尋文字 (PyMuPDF 預設是不分大小寫的，這對語音控制很好)
             found_instances = page.search_for(text_to_find)
-
-            # 2. 如果精確搜尋失敗，嘗試只搜尋前兩個字 (模糊搜尋)
-            if not found_instances and len(text_to_find) >= 2:
-                print(f"⚠️ 精確搜尋失敗，嘗試搜尋前兩個字: {text_to_find[:2]}")
-                found_instances = page.search_for(text_to_find[:2])
 
             created_marks = []
 
-            # 3. 判斷是否找到
+            # 2. 判斷結果
             if found_instances:
-                print(f"✅ 找到 {len(found_instances)} 處文字匹配，存入資料庫...")
+                print(f"✅ 找到 {len(found_instances)} 處完全匹配，存入資料庫...")
                 for inst in found_instances:
                     # 轉成比例座標 (0.0 ~ 1.0)
                     rect_ratio = [inst.x0 / w, inst.y0 / h, inst.x1 / w, inst.y1 / h]
@@ -479,32 +490,28 @@ def mark_pdf_api(request, pdf_id):
                         content=text_to_find
                     )
                     created_marks.append({'rect': rect_ratio, 'type': mark_type})
+
+                doc.close()
+                # 回傳成功，前端會畫出框框
+                return JsonResponse({'status': 'success', 'marks': created_marks})
+
             else:
-                # ★★★ 強制保底機制 (關鍵) ★★★
-                # 如果真的找不到字，強制在左上角存一個座標，確保資料庫有東西
-                print(f"❌ 完全找不到文字 '{text_to_find}'，執行【強制存檔】")
+                # ★★★ 這裡做了修改 ★★★
+                # 如果找不到完全相符的字，就回傳錯誤訊息，不要強制存檔
+                print(f"❌ 找不到精確文字 '{text_to_find}'，略過不存檔。")
+                doc.close()
 
-                # 建立一個左上角的預設框框
-                fallback_rect = [0.1, 0.1, 0.5, 0.2]
-
-                Mark.objects.create(
-                    pdf=pdf_record,
-                    page=page_num,
-                    type=mark_type,
-                    rect=fallback_rect,
-                    content=f"未找到: {text_to_find}"
-                )
-                created_marks.append({'rect': fallback_rect, 'type': mark_type})
-
-            doc.close()
-            return JsonResponse({'status': 'success', 'marks': created_marks})
+                # 回傳 fail 或 error，讓前端知道沒畫成功
+                return JsonResponse({
+                    'status': 'fail',
+                    'message': f'在第 {page_num + 1} 頁找不到文字：{text_to_find}'
+                })
 
         except Exception as e:
             print(f"❌ API Error: {e}")
             return JsonResponse({'status': 'error', 'message': str(e)})
 
     return JsonResponse({'status': 'error'})
-
 
 # ------------------------------------------------------------------
 # API 2: 下載合成後的 PDF
@@ -515,7 +522,11 @@ def download_annotated_pdf(request, pdf_id):
     pdf_record = get_object_or_404(UploadedPDF, pk=pdf_id)
     marks = Mark.objects.filter(pdf=pdf_record)
 
-    print(f"📊 資料庫中共有 {marks.count()} 筆標記")
+    count = marks.count()
+    print(f"📊 資料庫中共有 {count} 筆標記")
+
+    if count == 0:
+        print("⚠️ 無標記資料，將下載原始檔")
 
     # 開啟原始 PDF
     try:
@@ -526,42 +537,60 @@ def download_annotated_pdf(request, pdf_id):
     draw_count = 0
 
     # 開始繪圖
-    for mark in marks:
+    for i, mark in enumerate(marks):
         try:
             page_idx = int(mark.page)
             if 0 <= page_idx < len(pdf_doc):
                 page = pdf_doc[page_idx]
                 w, h = page.rect.width, page.rect.height
 
-                r = mark.rect  # 取出比例座標
+                r = mark.rect  # 取出比例座標 [x1, y1, x2, y2]
 
                 # 防呆：確保座標格式正確
                 if not isinstance(r, list) or len(r) != 4:
+                    print(f"❌ 第 {i + 1} 筆標記座標格式錯誤，跳過。")
                     continue
 
                 # 轉回絕對座標
                 rect_coords = fitz.Rect(r[0] * w, r[1] * h, r[2] * w, r[3] * h)
+                shape = page.new_shape()
 
-                if mark.type == 'H':  # 螢光筆
-                    shape = page.new_shape()
+                # --- 判斷標記類型並繪圖 ---
+                if mark.type == 'H':
+                    # 螢光筆 (Highlight)
+                    print(f"   [{i + 1}/{count}] Page {page_idx}: 🖊️ 繪製螢光筆 (Highlight)")
                     shape.draw_rect(rect_coords)
                     shape.finish(color=(1, 1, 0), fill=(1, 1, 0), fill_opacity=0.3, width=0)
-                    shape.commit()
-                else:  # 紅框
-                    shape = page.new_shape()
+
+                elif mark.type == 'U':
+                    # 底線 (Underline)
+                    print(f"   [{i + 1}/{count}] Page {page_idx}: 🖊️ 繪製底線 (Underline)")
+                    # 從左下畫到右下
+                    p1 = fitz.Point(rect_coords.x0, rect_coords.y1)
+                    p2 = fitz.Point(rect_coords.x1, rect_coords.y1)
+                    shape.draw_line(p1, p2)
+                    # 設定線條顏色為紅色，寬度 2
+                    shape.finish(color=(1, 0, 0), width=2)
+
+                else:
+                    # 預設：紅框 (Red Box)
+                    print(f"   [{i + 1}/{count}] Page {page_idx}: 🖊️ 繪製紅框 (Red Box)")
                     shape.draw_rect(rect_coords)
-                    shape.finish(color=(1, 0, 0), width=3)  # 線條粗度 3
-                    shape.commit()
+                    shape.finish(color=(1, 0, 0), width=3)
 
+                # 提交繪圖
+                shape.commit()
                 draw_count += 1
-        except Exception as e:
-            print(f"繪圖錯誤 (Mark ID {mark.id}): {e}")
+            else:
+                print(f"⚠️ Page {page_idx} 超出範圍，跳過。")
 
-    print(f"🖊️ 成功繪製了 {draw_count} 個標記")
+        except Exception as e:
+            print(f"❌ 繪圖錯誤 (Mark ID {mark.id}): {e}")
+
+    print(f"✅ 成功繪製了 {draw_count} 個標記，正在打包檔案...")
 
     # 輸出檔案
     buffer = io.BytesIO()
-    # deflate=True 壓縮檔案，garbage=4 清理垃圾數據
     pdf_doc.save(buffer, garbage=4, deflate=True)
     pdf_doc.close()
     buffer.seek(0)

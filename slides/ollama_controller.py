@@ -3,8 +3,10 @@ import re
 import os
 import logging
 import threading
+import time  # 用於計算時間差
 import httpx  # 必須安裝: pip install httpx
 from opencc import OpenCC
+from difflib import SequenceMatcher  # 用於模糊比對
 
 logger = logging.getLogger("slides.ollama_controller")
 
@@ -35,33 +37,91 @@ except Exception as e:
     async_client = None
 
 # ==========================================
-# 執行緒局部變數
+# [修改] 狀態管理: 帶有時間過期機制的暫存區
 # ==========================================
-thread_data = threading.local()
+# Key: session_id
+# Value: { "text": "上一段文字", "timestamp": 171566... }
+USER_LAST_SEGMENT = {}
+
+# 設定暫存存活時間 (秒)，超過此時間則視為過期，不進行合併
+BUFFER_TTL = 5.0
 
 
-def _get_highlight_buffer():
-    if not hasattr(thread_data, 'highlight_buffer'):
-        thread_data.highlight_buffer = None
-    return thread_data.highlight_buffer
+def get_last_segment(session_id: str) -> str:
+    data = USER_LAST_SEGMENT.get(session_id)
+    if not data:
+        return ""
+
+    # 檢查是否過期
+    time_diff = time.time() - data.get("timestamp", 0)
+    if time_diff > BUFFER_TTL:
+        # 過期了，清除並回傳空字串
+        clear_last_segment(session_id)
+        return ""
+
+    return data.get("text", "")
 
 
-def _set_highlight_buffer(val):
-    thread_data.highlight_buffer = val
+def set_last_segment(session_id: str, text: str):
+    # 寫入當前時間
+    USER_LAST_SEGMENT[session_id] = {
+        "text": text,
+        "timestamp": time.time()
+    }
+
+
+def clear_last_segment(session_id: str):
+    if session_id in USER_LAST_SEGMENT:
+        del USER_LAST_SEGMENT[session_id]
+
+
+# ==========================================
+# 輔助函式
+# ==========================================
+
+def add_space_between_zh_en(text: str) -> str:
+    """
+    強制在中英文之間加入空白。
+    注意：這一步是為了讓 'fuzzy_correct_keywords' 能正確辨識黏在一起的指令
+    (如 '語音辨識Highlight')。雖然您最後希望沒有空格，但這一步對於
+    '找出指令' 是必須的。我們會在最後輸出的步驟把空格全部刪掉。
+    """
+    # 中文接英文 -> 加空白 (例如：識H)
+    text = re.sub(r'([\u4e00-\u9fa5])([a-zA-Z])', r'\1 \2', text)
+    # 英文接中文 -> 加空白 (例如：t語)
+    text = re.sub(r'([a-zA-Z])([\u4e00-\u9fa5])', r'\1 \2', text)
+    return text
+
+
+def remove_punctuation_and_spaces(text: str) -> str:
+    """
+    [嚴格清理]
+    1. 移除所有標點符號
+    2. 移除所有空白 (跨句空格、詞間空格)
+    3. 只保留：中文、英文、數字
+    """
+    # Regex 邏輯：
+    # [^\u4e00-\u9fa5a-zA-Z0-9] 代表 "非" (中文 或 英文 或 數字) 的所有字元
+    # 將這些字元全部替換為空字串
+    return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
 
 
 def clean_mark_text(text: str) -> str:
+    # 這是舊的清理函式，保留作為 Fallback
     text = converter.convert(text.strip())
     keywords = [
         "畫底線", "畫重點", "標記重點", "底線", "畫線", "重點",
         "畫螢光筆", "用螢光筆", "螢光筆", "highlight", "underline", "mark"
     ]
-    for kw in keywords:
-        if text.lower().startswith(kw):
-            return text[len(kw):].strip()
-        if text.lower().endswith(kw):
-            return text[:-len(kw)].strip()
-    return text
+    for _ in range(2):
+        for kw in keywords:
+            if text.lower().startswith(kw):
+                text = text[len(kw):].strip()
+            if text.lower().endswith(kw):
+                text = text[:-len(kw)].strip()
+
+    # [關鍵修改] 最後做嚴格清理 (去符號、去空格、留數字)
+    return remove_punctuation_and_spaces(text)
 
 
 def chinese_to_arabic(cn: str):
@@ -77,13 +137,76 @@ def chinese_to_arabic(cn: str):
     return None
 
 
+def fuzzy_correct_keywords(text: str, threshold=0.8) -> str:
+    """
+    使用相似度比對，將錯誤的語音辨識單字修正為標準指令。
+    """
+    targets = {
+        "underline": "underline",
+        "highlight": "highlight"
+    }
+    words = text.split()
+    corrected_words = []
+
+    for word in words:
+        clean_word = re.sub(r'[^a-zA-Z]', '', word.lower())
+        best_match = None
+        highest_ratio = 0.0
+
+        for target in targets:
+            ratio = SequenceMatcher(None, clean_word, target).ratio()
+            if ratio > highest_ratio:
+                highest_ratio = ratio
+                best_match = target
+
+        if highest_ratio >= threshold and best_match:
+            corrected_words.append(targets[best_match])
+        else:
+            corrected_words.append(word)
+
+    return " ".join(corrected_words)
+
+
 # ==========================================
-# 功能 1: 簡報指令判斷 (直接連 Ollama 11434，保持快速)
+# [修改] 夾心內容提取函式
 # ==========================================
-async def predict_slide_action(text: str) -> str:
+def extract_sandwiched_content(text: str) -> str:
+    """
+    從字串中精準提取「第一個關鍵字」與「最後一個關鍵字」中間的內容。
+    """
+    text = converter.convert(text.strip())
+    triggers = ['highlight', '螢光筆', 'underline', '畫底線', '底線']
+
+    # 建立 Regex: (highlight|螢光筆|...)
+    pattern = "|".join(map(re.escape, triggers))
+
+    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+
+    if len(matches) < 2:
+        return clean_mark_text(text)
+
+    # 取第一個關鍵字的「結束點」
+    start_idx = matches[0].end()
+    # 取最後一個關鍵字的「開始點」
+    end_idx = matches[-1].start()
+
+    # 提取中間內容
+    extracted = ""
+    if start_idx < end_idx:
+        extracted = text[start_idx:end_idx]
+
+    # [關鍵修改] 強制執行嚴格清理 (去空格、去符號、留數字)
+    return remove_punctuation_and_spaces(extracted)
+
+
+# ==========================================
+# 功能 1: 簡報指令判斷 (支援滑動視窗邏輯)
+# ==========================================
+async def predict_slide_action(text: str, session_id: str = "default") -> str:
     """
     預測簡報動作指令
-    包含：下一頁、上一頁、跳頁、螢光筆(Highlight)、底線(Underline)
+    :param text: 本次語音輸入
+    :param session_id: 用戶識別碼
     """
     if async_client is None:
         return "none"
@@ -91,115 +214,117 @@ async def predict_slide_action(text: str) -> str:
     # 1. 基礎清理
     text = converter.convert(text.strip())
 
-    # 2. 【關鍵步驟】使用 Regex 進行「標準化」替換
-    # flags=re.IGNORECASE 會忽略大小寫
-    # \s* 代表中間可以有 0 到多個空白 (handling "under line", "underline", "High light")
+    # 先進行中英文斷開 (為了辨識指令，例如 "語音辨識Highlight")
+    text = add_space_between_zh_en(text)
 
-    # 處理 Highlight 系列 (high light, HighLight, highlighted -> highlight)
-    text = re.sub(r'high\s*light(ed)?', 'highlight', text, flags=re.IGNORECASE)
+    # 2. 模糊修正 (Underlight -> underline)
+    text = fuzzy_correct_keywords(text, threshold=0.8)
 
-    # 處理 Underline 系列 (under line, UnderLine -> underline)
-    text = re.sub(r'under\s*line', 'underline', text, flags=re.IGNORECASE)
+    # 3. 標準化替換
+    def standardize(t):
+        t = re.sub(r'high\s*light(ed)?', 'highlight', t, flags=re.IGNORECASE)
+        t = re.sub(r'under\s*line', 'underline', t, flags=re.IGNORECASE)
+        return t
 
-    # 3. 轉為小寫
-    text_lower = text.lower()
+    current_text_std = standardize(text)
 
-    # --- 包夾式邏輯 (支援 Highlight 與 Underline) ---
+    # 4. 【滑動視窗邏輯】取出上一段並合併
+    # get_last_segment 內部會檢查 TTL
+    prev_text = get_last_segment(session_id)
 
-    # 定義觸發關鍵字 (包含英文標準字與中文)
+    # [關鍵修改] 組合出「完整文本」
+    # 這裡移除原本中間的 " " (空格)，直接相加
+    # 雖然前面 add_space 可能加了空格，但那是為了指令辨識
+    # 最終內容會透過 remove_punctuation_and_spaces 把所有空格再刪掉
+    full_check_text = (prev_text + current_text_std).strip() if prev_text else current_text_std
+
+    # 5. 檢查關鍵字
     triggers = ['highlight', '螢光筆', 'underline', '畫底線', '底線']
 
-    # 製作 Regex Pattern: (highlight|螢光筆|underline|畫底線|底線)
-    trigger_pattern = f"({'|'.join(triggers)})"
+    # 計算組合字串中出現的關鍵字總次數
+    keyword_count = 0
+    last_keyword = ""
 
-    # 切分字串，保留分隔符
-    parts = re.split(trigger_pattern, text_lower)
+    # 轉小寫以利計算
+    lower_full_text = full_check_text.lower()
+    for t in triggers:
+        cnt = lower_full_text.count(t)
+        if cnt > 0:
+            keyword_count += cnt
+            last_keyword = t
 
-    current_buffer = _get_highlight_buffer()
+    # --- 決策樹 ---
 
-    # 如果切分出超過一段 (代表有關鍵字)，或是目前正在 Buffer 模式中
-    if len(parts) > 1 or current_buffer is not None:
-        for i, part in enumerate(parts):
-            # 檢查 part 是否為關鍵字
-            if part in triggers:
-                if current_buffer is None:
-                    # --- [模式開啟] ---
-                    current_buffer = ""
-                else:
-                    # --- [模式關閉] ---
-                    final_text = clean_mark_text(current_buffer)
-                    _set_highlight_buffer(None)
+    # [情況 A] 成功組成指令 (關鍵字 >= 2，代表有頭有尾)
+    if keyword_count >= 2:
+        # 使用 extract_sandwiched_content 提取並自動嚴格清理
+        final_content = extract_sandwiched_content(full_check_text)
 
-                    # 判斷是用什麼關鍵字結束的，決定回傳 U 還是 H
-                    if part in ['underline', '畫底線', '底線']:
-                        return f"U:{final_text}"
-                    else:
-                        return f"H:{final_text}"
-            else:
-                # 累積內容 (非關鍵字的部分)
-                if current_buffer is not None:
-                    current_buffer += part
+        clear_last_segment(session_id)  # 任務完成，清除暫存
 
-        # 更新 Buffer 狀態
-        _set_highlight_buffer(current_buffer)
+        if last_keyword in ['underline', '畫底線', '底線']:
+            return f"U:{final_content}"
+        else:
+            return f"H:{final_content}"
 
-        # 如果還在 buffer 中 (只講了一次關鍵字)，回傳 S 讓文字繼續顯示
-        if current_buffer is not None:
-            return "S"
+    # [情況 B] 尚未完成 (關鍵字 = 1 或是 處於等待狀態)
+    elif keyword_count > 0 or prev_text != "":
+        # 只要還有未閉合的關鍵字，就保留等待下一句
+        set_last_segment(session_id, full_check_text)
+        return "S"
 
-    # --- LLM 判斷邏輯 (處理單次指令或其他意圖) ---
-    prompt = (
-        "你是簡報輔助系統，請根據使用者的語句判斷是否為操作指令。\n"
-        "請嚴格遵守以下規則：\n"
-        "1. 若語句只是講述內容（朗讀、解釋），請輸出 'S'。\n"
-        "2. 若語句提到「下一頁」「往後」「next page」「continue」等，輸出 'N'。\n"
-        "3. 若語句提到「上一頁」「回去」「previous page」「go back」等，輸出 'P'。\n"
-        "4. 若語句包含「第X頁」「page X」「go to page X」等，輸出數字 X。\n"
-        "5. 若語句包含 'underline' 或 中文的「畫底線」「底線」「畫重點」「標記重點」 → 輸出 'U'。\n"
-        "6. 若語句包含 'highlight' 或 中文的「畫螢光筆」「螢光筆」 → 輸出 'H'。\n"
-        "7. 若模糊或無法確定，輸出 'S'。\n"
-        "輸出只能是以下其中之一：'N'、'P'、'S'、'U'、'H' 或 數字。禁止輸出其他內容。"
-    )
+    # [情況 C] 完全沒有關鍵字 -> 進入原本的 LLM 判斷
+    else:
+        clear_last_segment(session_id)  # 確保暫存乾淨
 
-    try:
-        response = await async_client.chat(
-            model=SELECTED_LLM_MODEL,
-            messages=[
-                {'role': 'system', 'content': prompt},
-                {'role': 'user', 'content': text}
-            ]
+        # 先用 Regex 快速篩選
+        cmd_text = current_text_std.lower()
+        if re.search(r"(下一頁|next|往後|continue)", cmd_text): return "next"
+        if re.search(r"(上一頁|prev|回去|previous|back)", cmd_text): return "prev"
+
+        cn_match = re.search(r"(第)?([零一二兩三四五六七八九十]+)頁", text)
+        if cn_match:
+            n = chinese_to_arabic(cn_match.group(2))
+            if n: return f"goto:{n}"
+
+        # LLM 判斷
+        prompt = (
+            "你是簡報輔助系統，請根據使用者的語句判斷是否為操作指令。\n"
+            "請嚴格遵守以下規則：\n"
+            "1. 若語句只是講述內容（朗讀、解釋），請輸出 'S'。\n"
+            "2. 若語句提到「下一頁」「往後」「next page」「continue」等，輸出 'N'。\n"
+            "3. 若語句提到「上一頁」「回去」「previous page」「go back」等，輸出 'P'。\n"
+            "4. 若語句包含「第X頁」「page X」「go to page X」等，輸出數字 X。\n"
+            "5. 若語句包含 'underline' 或 中文的「畫底線」「底線」「畫重點」「標記重點」 → 輸出 'U'。\n"
+            "6. 若語句包含 'highlight' 或 中文的「畫螢光筆」「螢光筆」 → 輸出 'H'。\n"
+            "7. 若模糊或無法確定，輸出 'S'。\n"
+            "輸出只能是以下其中之一：'N'、'P'、'S'、'U'、'H' 或 數字。禁止輸出其他內容。"
         )
-        output = response.get('message', {}).get('content', '').strip()
-        clean_output = re.sub(r'[^a-zA-Z0-9]', '', output).upper()
 
-    except Exception as e:
-        logger.error(f"Ollama error: {e}")
-        clean_output = "S"
+        try:
+            response = await async_client.chat(
+                model=SELECTED_LLM_MODEL,
+                messages=[
+                    {'role': 'system', 'content': prompt},
+                    {'role': 'user', 'content': text}
+                ]
+            )
+            output = response.get('message', {}).get('content', '').strip()
+            clean_output = re.sub(r'[^a-zA-Z0-9]', '', output).upper()
 
-    # --- 後處理與分派 ---
+        except Exception as e:
+            logger.error(f"Ollama error: {e}")
+            clean_output = "S"
 
-    # 判斷底線 (LLM 輸出 U 或 關鍵字匹配)
-    if clean_output == 'U' or 'underline' in text_lower or any(k in text_lower for k in ['畫底線', '底線', '畫重點']):
-        return f"U:{clean_mark_text(text)}"
+        # LLM 後處理 (這裡也會經過 remove_punctuation_and_spaces)
+        if clean_output == 'U': return f"U:{clean_mark_text(text)}"
+        if clean_output == 'H': return f"H:{clean_mark_text(text)}"
+        if clean_output == 'N': return "next"
+        if clean_output == 'P': return "prev"
+        if re.match(r'^\d+$', clean_output): return f"goto:{clean_output}"
 
-    # 判斷螢光筆 (LLM 輸出 H 或 關鍵字匹配)
-    elif clean_output == 'H' or 'highlight' in text_lower or any(k in text_lower for k in ['螢光筆', '畫螢光筆']):
-        return f"H:{clean_mark_text(text)}"
+        return "none"
 
-    elif clean_output == 'N':
-        return "next"
-    elif clean_output == 'P':
-        return "prev"
-    elif re.match(r'^\d+$', clean_output):
-        return f"goto:{clean_output}"
-
-    # 中文數字頁碼判斷 (例如：第二十頁)
-    cn_match = re.search(r"(第)?([零一二兩三四五六七八九十]+)頁", text)
-    if cn_match:
-        n = chinese_to_arabic(cn_match.group(2))
-        if n: return f"goto:{n}"
-
-    return "none"
 
 # ==========================================
 # 功能 2: 會議摘要 (透過 HTTP 呼叫遠端 AI Server)

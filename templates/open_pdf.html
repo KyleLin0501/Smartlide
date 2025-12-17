@@ -109,10 +109,44 @@
 
     // 畫記與 UI 輔助
     function drawRect(rect, type) {
-        const w = hlCanvas.width; const h = hlCanvas.height;
-        const x = rect[0]*w; const y = rect[1]*h; const rw = (rect[2]-rect[0])*w; const rh = (rect[3]-rect[1])*h;
-        if (type === 'H') { hlCtx.fillStyle = "rgba(255, 255, 0, 0.3)"; hlCtx.fillRect(x, y, rw, rh); }
-        else { hlCtx.beginPath(); hlCtx.moveTo(x, y+rh); hlCtx.lineTo(x+rw, y+rh); hlCtx.strokeStyle = "red"; hlCtx.lineWidth = 3; hlCtx.stroke(); }
+        const w = hlCanvas.width;
+        const h = hlCanvas.height;
+
+        // 將比例座標轉為畫布上的絕對像素
+        const x = rect[0] * w;
+        const y = rect[1] * h;
+        const rw = (rect[2] - rect[0]) * w;
+        const rh = (rect[3] - rect[1]) * h;
+
+        if (type === 'H') {
+            // --- 螢光筆 (Highlight) ---
+            hlCtx.fillStyle = "rgba(255, 255, 0, 0.3)";
+            hlCtx.fillRect(x, y, rw, rh);
+        }
+        else if (type === 'U') {
+            // --- ★★★ 新增：底線 (Underline) ★★★ ---
+            hlCtx.beginPath();
+            // 移動到左下角
+            hlCtx.moveTo(x, y + rh);
+            // 畫到右下角
+            hlCtx.lineTo(x + rw, y + rh);
+            hlCtx.strokeStyle = "red";
+            hlCtx.lineWidth = 3; // 線條粗細
+            hlCtx.stroke();
+        }
+        else {
+            // --- 紅框 (Red Box) ---
+            hlCtx.beginPath();
+            // 這裡原本的邏輯是只畫底線？通常紅框是畫四邊
+            // 您的舊代碼：hlCtx.moveTo(x, y+rh); hlCtx.lineTo(x+rw, y+rh); (這看起來像底線)
+
+            // 如果您希望 type='R' 是畫「框框」：
+            hlCtx.rect(x, y, rw, rh);
+
+            hlCtx.strokeStyle = "red";
+            hlCtx.lineWidth = 3;
+            hlCtx.stroke();
+        }
     }
     async function loadMarks(page) {
         hlCtx.clearRect(0, 0, hlCanvas.width, hlCanvas.height);
